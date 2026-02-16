@@ -1,0 +1,25 @@
+[project]
+name = "db-sync-monitoring"
+version = "0.1.0"
+description = "Track and visualize Cardano db-sync statistics."
+authors = ["Artur Wieczorek <artur.wieczorek@iohk.io>"]
+requires-python = ">=3.10"
+
+[build-system]
+requires = ["uv"]
+build-backend = "uv"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+fix = true
+lint.select = ["E", "F", "I", "UP", "NPY", "PERF", "RUF"]
+lint.ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+ignore_missing_imports = true
+warn_unused_configs = true
+warn_unreachable = true
+

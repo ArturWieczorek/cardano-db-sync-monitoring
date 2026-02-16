@@ -1,0 +1,24 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Test and coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime data and outputs
+*.db
+*.db-wal
+*.db-shm
+/data/
+/plots/
+/stats/
+
+# Secrets and logs
+.env
+*.log

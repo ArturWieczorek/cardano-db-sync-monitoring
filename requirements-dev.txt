@@ -1,0 +1,23 @@
+# Development-only dependencies: tests, linting, type-checking, pre-commit.
+# Installs the runtime deps as well via -r.
+
+-r requirements.txt
+
+mypy==1.10.0
+pre-commit==4.2.0
+pytest==8.3.5
+ruff==0.11.7
+
+# Transitive deps of the above (pinned for reproducibility).
+cfgv==3.4.0
+distlib==0.3.9
+exceptiongroup==1.2.2
+filelock==3.18.0
+identify==2.6.10
+iniconfig==2.1.0
+nodeenv==1.9.1
+platformdirs==4.3.7
+pluggy==1.5.0
+pyyaml==6.0.2
+tomli==2.2.1
+virtualenv==20.30.0

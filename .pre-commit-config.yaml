@@ -1,12 +1,18 @@
+# Bump these revs when you bump the corresponding versions in pyproject.toml
+# (or when ruff/mypy themselves release a major upgrade you want to pick up).
+# Keep them roughly in sync with what `uv.lock` resolves to.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.3.5  # Check latest!
+    rev: v0.15.14
     hooks:
       - id: ruff
         args: ["--fix"]
+      - id: ruff-format
 
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.10.0  # Check latest!
+    rev: v1.20.2
     hooks:
       - id: mypy
-
+        additional_dependencies:
+          - pandas-stubs
+          - types-psutil

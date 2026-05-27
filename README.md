@@ -28,7 +28,7 @@ python3 scripts/db-sync-report.py --pg-dbname preprod_13.6.0.5,preprod_13.7.1.0
 
 After that you'll have:
 
-- `plots/cardano-db-sync/preprod/13.6.0.5_vs_13.7.1.0*.html` — three HTML plots (cpu_ram, ingest, tables)
+- `plots/cardano-db-sync/preprod/preprod_13.6.0.5_vs_13.7.1.0_*_by_*.html` — three HTML plots (cpu_ram, ingest, tables)
 - `plots/cardano-db-sync/preprod_13.6.0.5_vs_preprod_13.7.1.0_epoch_stats_<ts>.html` — per-epoch comparison plot
 - `stats/preprod_13.6.0.5_vs_preprod_13.7.1.0_summary_<ts>.txt` — headline deltas (Total sync time A vs B → −27%, etc.)
 - `stats/preprod_13.6.0.5_vs_preprod_13.7.1.0_db_size_report_<ts>.txt` — full per-table and per-index size breakdown
@@ -321,6 +321,7 @@ Optional:
 - `--pg-host`, `--pg-port`, `--pg-user` — Postgres connection overrides. If unset, the script honors the standard `PGHOST` / `PGPORT` / `PGUSER` / `PGPASSWORD` env vars (the same convention `psql` uses), falling back to psycopg2's defaults (`localhost` / `5432` / current user).
 - `--interval` (default `10`) — sampling interval in seconds.
 - `--json` — emit one JSON object per sample on stdout (instead of the human-readable pipe-separated form). Each line includes `env`, `label`, `version`, `slot_no`, `epoch_no`, `sync_percent`, `tip_lag_sec`, `db_size_bytes`, `max_tx_id`, `utxo_count`, `cpu_percent`, `rss_mb`. Drop into `jq` / fluentd / any log analyzer without re-parsing.
+- `--match-arg <substring>` — extra disambiguator when multiple `cardano-db-sync` processes share a host (e.g. LSM vs in-memory builds). The substring must appear somewhere in the matched process's command line (argv[0] including its full path + any argument); a short unique token like `lsm` or `inmem` works. Without this flag, the first `cardano-db-sync` process found wins, which can be the wrong one if more than one is running. See [Disambiguating multiple processes per env](#disambiguating-multiple-processes-per-env) below.
 
 ```bash
 $ python3 scripts/db-sync-monitor.py
@@ -399,6 +400,7 @@ Optional:
 - `--socket-path` — override the node socket; usually auto-detected from the process command line.
 - `--interval` — sampling interval in seconds (default `10`).
 - `--json` — emit one JSON object per sample on stdout (instead of the pipe-separated form). Same shape as `db-sync-monitor.py --json`, with `slot_no`, `epoch_no`, `era`, `sync_percent`, `cpu_percent`, `rss_mb`, etc.
+- `--match-arg <substring>` — extra disambiguator when multiple `cardano-node` processes share a host. The env name (`preprod`, `mainnet`, etc.) is already required to appear in argv as the first-level filter; `--match-arg` adds a second substring that must also appear (in any arg or in argv[0]'s path). See [Disambiguating multiple processes per env](#disambiguating-multiple-processes-per-env) below.
 
 At startup the monitor reports whether the chosen version label already has samples in the SQLite DB (same notice as `db-sync-monitor.py`), so you can tell at a glance whether you're starting fresh or extending an earlier session.
 
@@ -427,7 +429,7 @@ $ python3 scripts/db-sync-plot.py --env preprod
 Available versions:
 1. cardano-db-sync 13.6.0.5 preprod
 Select versions to compare (comma-sep indices, e.g. 1,2): 1
-Saved plot to plots/cardano-db-sync/preprod/13.6.0.5.html
+Saved plot to plots/cardano-db-sync/preprod/preprod_13.6.0.5_cpu_ram_by_slot.html
 ```
 
 Non-interactive (for scripting / CI):
@@ -464,7 +466,7 @@ python3 scripts/db-sync-plot.py --env preprod --versions 13.6.0.5,13.6.0.5-hasql
 python3 scripts/db-sync-plot.py --env preprod --versions 13.6.0.5 --metrics all --x-axis time
 ```
 
-The filename grows a `_<metrics>` tag (e.g. `13.6.0.5_ingest_time.html`) so different metric sets for the same versions don't collide. `cpu_ram` keeps the bare name for backwards-compatibility. If you select `ingest` or `tables` against a DB that was collected before these tables existed, the script bails with an explicit error pointing at the monitor.
+Output filenames follow the scheme `<env>_<versions>_<metrics>_by_<x-axis>.html` — every plot self-describes which env, which run(s), which metric set, and which x-axis it was rendered with, so a file viewed in isolation (downloaded, screenshotted, picked out of a directory listing) still tells you what it is even when the parent dir context is gone. Examples for a single version on preprod: `preprod_13.7.1.0_cpu_ram_by_time.html`, `preprod_13.7.1.0_ingest_by_time.html`, `preprod_13.7.1.0_tables_by_slot.html`. A two-version comparison adds `_vs_` (env stays at the front, once): `preprod_13.6.0.5_vs_13.7.1.0_cpu_ram_by_time.html`. If you select `ingest` or `tables` against a DB that was collected before these tables existed, the script bails with an explicit error pointing at the monitor.
 
 ### Missing-data warning when comparing versions
 
@@ -494,7 +496,7 @@ python3 scripts/db-sync-plot.py --env preprod --versions 13.6.0.5 --x-axis time
 
 Notes:
 - Time mode skips rows whose `ts` is NULL. Those came from collector runs that pre-date the `ts` column. If every selected row pre-dates `ts`, the script exits with a hint pointing back to `--x-axis slot`.
-- The output filename gets a `_time` suffix (`<versions>_time.html`) so slot-axis and time-axis plots don't overwrite each other.
+- The output filename encodes the x-axis as `_by_slot` / `_by_time` so the two modes don't overwrite each other (`preprod_13.7.1.0_cpu_ram_by_slot.html` vs `preprod_13.7.1.0_cpu_ram_by_time.html`).
 
 Only `--env` is required. `--sqlite-db` defaults to `data/cardano-db-sync/<env>.db` and `--outdir` defaults to `plots/cardano-db-sync/` — both overridable.
 
@@ -511,7 +513,7 @@ Available versions:
 1. cardano-node 10.1.4 preprod
 2. cardano-node 11.0.1 preprod
 Select versions to compare (comma-sep indices, e.g. 1,2): 1,2
-Saved plot to plots/cardano-node/preprod/10.1.4_vs_11.0.1.html
+Saved plot to plots/cardano-node/preprod/preprod_10.1.4_vs_11.0.1_cpu_ram_by_slot.html
 ```
 
 Non-interactive equivalents:
@@ -539,7 +541,7 @@ python3 scripts/node-plot.py --env preprod --versions 10.1.4,11.0.1 --x-axis tim
 # Sync time by era + per-epoch duration, two versions overlaid
 python3 scripts/node-plot.py --env preprod --versions 10.1.4,11.0.1 --metrics ingest
 
-# Both kinds at once — produces <vers>.html (cpu_ram) and <vers>_ingest.html
+# Both kinds at once — produces <env>_<vers>_cpu_ram_by_slot.html and <env>_<vers>_ingest_by_slot.html
 python3 scripts/node-plot.py --env preprod --versions 10.1.4,11.0.1 --metrics all
 ```
 
@@ -764,28 +766,27 @@ Important: this uses Python's `sqlite3.Connection.backup()` (the same API as `sq
 
 ### Removing records
 
-To remove every record associated with a specific version (e.g. `cardano-db-sync 13.6.0.5 preprod`) from all three tables in your SQLite database, you can run the following `DELETE` statements—either via the `sqlite3` CLI or in your Python code. These will safely remove only rows matching that exact `version` string:
+To remove every record associated with a specific version (e.g. `cardano-db-sync 13.6.0.5 preprod`) from every version-keyed table in your SQLite database, you can run the following `DELETE` statements—either via the `sqlite3` CLI or in your Python code. These will safely remove only rows matching that exact `version` string.
+
+A db-sync DB has five tables that carry the `version` column (`memory_metrics`, `cpu_metrics`, `db_sync_version`, `ingest_metrics`, `table_rowcounts`); a node DB has four (`memory_metrics`, `cpu_metrics`, `node_version`, `node_ingest_metrics`). Every recipe below must touch each of them, otherwise stale rows under the old label will reappear in plots and reports.
 
 ```sql
 -- Open your SQLite DB
 $ sqlite3 data/cardano-db-sync/preprod.db
 
--- Delete from memory_metrics
-DELETE FROM memory_metrics
- WHERE version = 'cardano-db-sync 13.6.0.5 preprod';
-
--- Delete from cpu_metrics
-DELETE FROM cpu_metrics
- WHERE version = 'cardano-db-sync 13.6.0.5 preprod';
-
--- Delete from db_sync_version
-DELETE FROM db_sync_version
- WHERE version = 'cardano-db-sync 13.6.0.5 preprod';
+-- Delete from every version-keyed table
+DELETE FROM memory_metrics   WHERE version = 'cardano-db-sync 13.6.0.5 preprod';
+DELETE FROM cpu_metrics      WHERE version = 'cardano-db-sync 13.6.0.5 preprod';
+DELETE FROM db_sync_version  WHERE version = 'cardano-db-sync 13.6.0.5 preprod';
+DELETE FROM ingest_metrics   WHERE version = 'cardano-db-sync 13.6.0.5 preprod';
+DELETE FROM table_rowcounts  WHERE version = 'cardano-db-sync 13.6.0.5 preprod';
 
 -- (Optionally, verify no rows remain)
-SELECT COUNT(*) FROM memory_metrics  WHERE version = 'cardano-db-sync 13.6.0.5 preprod';
-SELECT COUNT(*) FROM cpu_metrics     WHERE version = 'cardano-db-sync 13.6.0.5 preprod';
-SELECT COUNT(*) FROM db_sync_version WHERE version = 'cardano-db-sync 13.6.0.5 preprod';
+SELECT COUNT(*) FROM memory_metrics   WHERE version = 'cardano-db-sync 13.6.0.5 preprod';
+SELECT COUNT(*) FROM cpu_metrics      WHERE version = 'cardano-db-sync 13.6.0.5 preprod';
+SELECT COUNT(*) FROM db_sync_version  WHERE version = 'cardano-db-sync 13.6.0.5 preprod';
+SELECT COUNT(*) FROM ingest_metrics   WHERE version = 'cardano-db-sync 13.6.0.5 preprod';
+SELECT COUNT(*) FROM table_rowcounts  WHERE version = 'cardano-db-sync 13.6.0.5 preprod';
 
 -- Exit
 .quit
@@ -800,10 +801,21 @@ If you prefer to do this within your monitoring script (using the `sqlite3` modu
 ```python
 import sqlite3
 
-def purge_version(db_file: str, version: str):
+# Pick the tuple that matches the DB you're cleaning. db-sync DBs have
+# `ingest_metrics` and `table_rowcounts`; node DBs have `node_ingest_metrics`
+# and use `node_version` instead of `db_sync_version`.
+DB_SYNC_VERSION_TABLES = (
+    'memory_metrics', 'cpu_metrics', 'db_sync_version',
+    'ingest_metrics', 'table_rowcounts',
+)
+NODE_VERSION_TABLES = (
+    'memory_metrics', 'cpu_metrics', 'node_version', 'node_ingest_metrics',
+)
+
+def purge_version(db_file: str, version: str, tables=DB_SYNC_VERSION_TABLES):
     with sqlite3.connect(db_file) as conn:
         c = conn.cursor()
-        for tbl in ('memory_metrics', 'cpu_metrics', 'db_sync_version'):
+        for tbl in tables:
             c.execute(f"DELETE FROM {tbl} WHERE version = ?", (version,))
         conn.commit()
 ```
@@ -811,15 +823,32 @@ def purge_version(db_file: str, version: str):
 Then call:
 
 ```python
+# db-sync DB
 purge_version('data/cardano-db-sync/preprod.db', 'cardano-db-sync 13.6.0.5 preprod')
+
+# node DB — pass the node table tuple
+purge_version('data/cardano-node/preprod.db',
+              'cardano-node 10.1.4 preprod',
+              tables=NODE_VERSION_TABLES)
 ```
 
-This will atomically delete all rows for that version across the three tables.
+This atomically deletes all rows for that version across every version-keyed table in the chosen DB.
 
 
 ### Updating stats for a wrong `db-sync` version
 
-You can do this with a simple `UPDATE` statement in SQLite. For each table that has a `version` column, run:
+Easiest: use `scripts/rename-version.py`. It auto-detects role (db-sync vs node) from the DB schema, touches every version-keyed table in one transaction, takes a timestamped backup first, and refuses to merge two distinct series under one label:
+
+```bash
+python3 scripts/rename-version.py --env preprod --role db-sync \
+    --from-version 'cardano-db-sync LSM-13.7.1.0-node 11.0.1 preprod' \
+    --to-version   'cardano-db-sync LSM-13.7.1.0-node-11.0.1 preprod' \
+    --dry-run    # drop --dry-run to apply
+```
+
+Flags: `--path` to point at any DB directly, `--no-backup` if you already took one, `--merge` to intentionally collapse two labels into one. If you skip `--role`, the script infers it from the `cardano-db-sync ` / `cardano-node ` prefix of `--from-version`.
+
+If you'd rather do it by hand, here's the raw SQL the script runs. A db-sync DB has five tables that carry a `version` column — you must touch all of them, otherwise the plot script will join rows from some tables and silently drop the rest (e.g. `_ingest_by_*.html` and `_tables_by_*.html` will be empty for the renamed version):
 
 ```sql
 UPDATE memory_metrics
@@ -833,6 +862,14 @@ UPDATE cpu_metrics
 UPDATE db_sync_version
    SET version = 'cardano-db-sync 13.6.0.5 preprod'
  WHERE version = 'cardano-db-sync 13.6.0.5';
+
+UPDATE ingest_metrics
+   SET version = 'cardano-db-sync 13.6.0.5 preprod'
+ WHERE version = 'cardano-db-sync 13.6.0.5';
+
+UPDATE table_rowcounts
+   SET version = 'cardano-db-sync 13.6.0.5 preprod'
+ WHERE version = 'cardano-db-sync 13.6.0.5';
 ```
 
 You can execute these in the `sqlite3` CLI or via your Python script:
@@ -842,21 +879,98 @@ $ sqlite3 data/cardano-db-sync/preprod.db <<EOF
 UPDATE memory_metrics    SET version = 'cardano-db-sync 13.6.0.5 preprod' WHERE version = 'cardano-db-sync 13.6.0.5';
 UPDATE cpu_metrics       SET version = 'cardano-db-sync 13.6.0.5 preprod' WHERE version = 'cardano-db-sync 13.6.0.5';
 UPDATE db_sync_version   SET version = 'cardano-db-sync 13.6.0.5 preprod' WHERE version = 'cardano-db-sync 13.6.0.5';
+UPDATE ingest_metrics    SET version = 'cardano-db-sync 13.6.0.5 preprod' WHERE version = 'cardano-db-sync 13.6.0.5';
+UPDATE table_rowcounts   SET version = 'cardano-db-sync 13.6.0.5 preprod' WHERE version = 'cardano-db-sync 13.6.0.5';
 EOF
 ```
 
-That will rename every matching row in all three tables.
+That will rename every matching row in all five tables.
 
 ### Applying the same to node stats DBs
 
-The `cardano-node` DBs in `data/cardano-node/` use the same `memory_metrics` and `cpu_metrics` tables, but the version table is named `node_version` (not `db_sync_version`), and version strings look like `cardano-node 10.1.4 preprod`. Adjust the table name and version string in the queries above accordingly:
+The `cardano-node` DBs in `data/cardano-node/` use the same `memory_metrics` and `cpu_metrics` tables, plus a `node_version` table (instead of `db_sync_version`) and a `node_ingest_metrics` table (the equivalent of db-sync's `ingest_metrics`, holding per-sample tip/slot/era data). Version strings look like `cardano-node 10.1.4 preprod`. There is no `table_rowcounts` analogue on the node side.
+
+Delete (all four version-keyed tables):
 
 ```bash
 $ sqlite3 data/cardano-node/preprod.db
-DELETE FROM memory_metrics WHERE version = 'cardano-node 10.1.4 preprod';
-DELETE FROM cpu_metrics    WHERE version = 'cardano-node 10.1.4 preprod';
-DELETE FROM node_version   WHERE version = 'cardano-node 10.1.4 preprod';
+DELETE FROM memory_metrics      WHERE version = 'cardano-node 10.1.4 preprod';
+DELETE FROM cpu_metrics         WHERE version = 'cardano-node 10.1.4 preprod';
+DELETE FROM node_version        WHERE version = 'cardano-node 10.1.4 preprod';
+DELETE FROM node_ingest_metrics WHERE version = 'cardano-node 10.1.4 preprod';
 ```
+
+Rename (same four tables):
+
+```bash
+$ sqlite3 data/cardano-node/preprod.db <<EOF
+UPDATE memory_metrics      SET version = 'cardano-node 10.1.4 preprod' WHERE version = 'cardano-node 10.1.4';
+UPDATE cpu_metrics         SET version = 'cardano-node 10.1.4 preprod' WHERE version = 'cardano-node 10.1.4';
+UPDATE node_version        SET version = 'cardano-node 10.1.4 preprod' WHERE version = 'cardano-node 10.1.4';
+UPDATE node_ingest_metrics SET version = 'cardano-node 10.1.4 preprod' WHERE version = 'cardano-node 10.1.4';
+EOF
+```
+
+
+# Disambiguating multiple processes per env
+
+If you're running two `cardano-node` (or two `cardano-db-sync`) instances on the same host for the same env — e.g. an LSM-backed build alongside an in-memory build to compare them under load — the monitor's process matcher will see both and pick *one of them* based on PID ordering. Specifically:
+
+- The matcher selects the first process whose `argv[0]` starts with `cardano-node` / `cardano-db-sync` and whose argv contains the env name (in the node case).
+- `psutil.process_iter()` enumerates in PID-ascending order, so the longer-running process (smaller PID) wins by default.
+- The monitor warns in stderr (`Multiple cardano-node processes match env=mainnet: 12345, 13456. Using PID 12345.`) on each sample, but still proceeds with the first match.
+
+Two risks with the default:
+
+1. **Silent drift on restart.** If the originally-matched process crashes and restarts, its new PID is likely larger than its sibling's. The next sample's `matches[0]` is then the *sibling*. CPU/RSS samples after that point are for the wrong process, with no visible signal that anything changed.
+2. **Sibling-takeover on death.** If the originally-matched process dies entirely, the sibling becomes the sole match — the monitor silently rolls onto it. The "Multiple…" warning disappears, so the failure looks like a recovery.
+
+## The `--match-arg` flag
+
+Both monitors accept an optional `--match-arg <substring>` that adds a second filter: the substring must appear somewhere in the matched process's full command line (argv[0] including its path, plus any argument). It's a plain substring search — no regex, no boundary requirements.
+
+```bash
+# Two mainnet nodes running, distinguished by config path:
+#   /opt/cardano-node --config /etc/cardano/mainnet-lsm.yaml ...     (PID 12345)
+#   /opt/cardano-node --config /etc/cardano/mainnet-inmem.yaml ...   (PID 13456)
+
+# Monitor only the LSM one:
+python3 scripts/node-monitor.py --env mainnet --node-ver 11.0.1-lsm \
+  --match-arg lsm
+
+# Or two db-syncs by --state-dir path:
+python3 scripts/db-sync-monitor.py --env mainnet --db-sync-ver 13.7.1.0-lsm \
+  --pg-dbname mainnet_lsm --match-arg lsm-state
+```
+
+Pick a token that's unique to the process you want to track — config filename, state-dir path, an env var visible in argv, even an extra wrapper script name. `lsm` / `inmem` / `lmdb` are typical short choices.
+
+With `--match-arg` set, the warning goes away when only one process matches (one's intended outcome). If multiple still match (the substring isn't specific enough), the warning still fires with the surviving PIDs.
+
+## What if you want to monitor both?
+
+You can run two monitor processes side-by-side, each with its own `--match-arg`, writing to the same SQLite stats DB:
+
+```bash
+# Terminal 1
+python3 scripts/db-sync-monitor.py --env mainnet --db-sync-ver 13.7.1.0-lsm \
+  --pg-dbname mainnet_lsm --match-arg lsm \
+  > logs/db-sync-monitor-lsm.log 2>&1 &
+
+# Terminal 2
+python3 scripts/db-sync-monitor.py --env mainnet --db-sync-ver 13.7.1.0-inmem \
+  --pg-dbname mainnet_inmem --match-arg inmem \
+  > logs/db-sync-monitor-inmem.log 2>&1 &
+```
+
+Both write to `data/cardano-db-sync/mainnet.db`. WAL mode handles the concurrent writes (writers serialize for sub-ms windows, doesn't cause measurable delay). Distinct `--db-sync-ver` labels keep their rows separated for later A/B plotting:
+
+```bash
+python3 scripts/db-sync-plot.py --env mainnet \
+  --versions 13.7.1.0-lsm,13.7.1.0-inmem --metrics all
+```
+
+Note: running two heavy db-sync processes on one host inflates each one's resource numbers compared to a solo run — they contend for disk I/O, page cache, postgres write throughput, etc. The comparison is still fair (both are equally constrained), but the absolute numbers shouldn't be quoted as "this is how fast X syncs on its own."
 
 
 # Troubleshooting

@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`--match-arg <substring>` flag on both monitors.** Disambiguates when
+  multiple `cardano-node` (or `cardano-db-sync`) processes are running on the
+  same host for the same env — e.g. an LSM-backed build next to an in-memory
+  one for A/B comparison. The substring must appear somewhere in the matched
+  process's command line (argv[0] including its full path, plus any argument);
+  a plain `in` check, no regex. Without the flag, behaviour is unchanged
+  (first matching process wins, with the existing "Multiple … match" warning).
+  db-sync-monitor's `get_process` was refactored from a simple `name.startswith`
+  check to a full-cmdline matcher so the substring search has something
+  meaningful to look at; see the new `_match_db_sync_process` method.
+- **README "Disambiguating multiple processes per env" section** covering
+  the silent-drift and sibling-takeover risks of the default matcher, the
+  `--match-arg` fix, and the "monitor both side-by-side" pattern.
 - **`scripts/backup-stats.py`** — wraps Python's `sqlite3.Connection.backup()`
   (the WAL-aware backup API) so you don't need to remember the right
   invocation before destructive operations. Supports `--env [--role]` for the
@@ -19,6 +32,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the backup API path, list semantics, immutability of the backup against
   subsequent source writes, and FileNotFoundError on missing sources.
 - `backup-stats.py` added to the smoke-test parametrize list.
+- **`scripts/rename-version.py`** — wraps the README's "rename a version label"
+  SQL recipe so renames go through one source of truth. Auto-detects role
+  (db-sync vs node) from the schema and updates every version-keyed table in
+  one transaction: 5 for db-sync (`memory_metrics`, `cpu_metrics`,
+  `db_sync_version`, `ingest_metrics`, `table_rowcounts`), 4 for node
+  (`memory_metrics`, `cpu_metrics`, `node_version`, `node_ingest_metrics`).
+  Motivation: the previous README recipe only listed the three "core" tables
+  and silently left `ingest_metrics`/`table_rowcounts` (or `node_ingest_metrics`)
+  under the old label, which made `_ingest.html` and `_tables.html` come up
+  empty for the renamed version. Supports `--env [--role]` and `--path`,
+  `--dry-run`, refuses to merge two labels into one unless `--merge` is set,
+  takes a timestamped backup (via `backup-stats.py`'s API) unless `--no-backup`.
+  Role is inferred from the `cardano-db-sync `/`cardano-node ` prefix of
+  `--from-version` when `--role` is omitted.
+- **`tests/test_rename_version.py`** — functional tests using `tmp_path`
+  covering role detection (db-sync, node, neither), `count_for` skipping
+  missing tables, full-table renames for both roles, dry-run no-op,
+  target-label collision refusal, `--merge` collapsing two series, and
+  no-op when the source label has zero rows.
+- `rename-version.py` added to the smoke-test parametrize list.
+- **README "Removing records" and "Updating stats for a wrong db-sync version"**
+  sections now cover all five db-sync tables (previously listed only three);
+  the node section adds `node_ingest_metrics` (previously missing) and grew a
+  rename block alongside its delete block. Intro spells out which tables each
+  role has, so the gap doesn't reopen next time the schema grows.
+- **`AGENTS.md`** — top-level guide for AI agents (Claude Code, Cursor, etc.)
+  working in this repo. Loosely modeled on IntersectMBO/cardano-node-tests's
+  AGENTS.md but rewritten for our reality (small Python tool, scripts +
+  tests, SQLite stats DBs, uv venv). Includes an architecture outline (which
+  file lives where and why), style/lint/typing rules, a hard requirement to
+  add tests for every new script and run the full suite to green before
+  declaring done, and the workflow contract that README and CHANGELOG must
+  be updated in the same change as user-facing code. Closes the recurring
+  gap where agents would add a script without a test or land a behavior
+  change without touching the docs.
 
 ### Changed
 
@@ -51,6 +99,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `height=800`, explicit `margin=dict(t=150, b=60, l=80, r=40)`,
   `title.pad.b=30`. `<code>` tags replaced with `<b>` (plotly's title
   HTML doesn't support `<code>`).
+
+### Fixed
+
+- **Plot output filenames now self-describe env, metric kind, and x-axis.**
+  Previously `out_path` treated `cpu_ram` as the "default" plot and gave
+  it no kind tag at all (so `LSM-13.7.1.0_time.html` could be any of the
+  three plots — there was no way to tell), the x-axis was encoded as a
+  bare `_time` suffix (which read like a timestamp at a glance) or no
+  suffix at all for `--x-axis slot`, and the env was only in the parent
+  directory — once a file was moved or shared the env context vanished.
+  New scheme is `<env>_<versions>_<kind>_by_<axis>.html` — every file
+  carries all four pieces of context, e.g.
+  `preprod_13.7.1.0_cpu_ram_by_slot.html`,
+  `preprod_13.7.1.0_ingest_by_time.html`,
+  `preprod_13.6.0.5_vs_13.7.1.0_tables_by_time.html` (env appears once at
+  the front since the SQLite stats DB is per-env, so both versions in a
+  comparison are guaranteed to share it). Identical change applied to
+  `node-plot.py`'s `out_path` so both scripts stay in lockstep, and the
+  scheme now matches db-sync-report's env-prefixed output convention.
+  README updated; `tests/test_plot_out_path.py` (new) pins the scheme
+  parametrized over both scripts, including an env-first-word assertion
+  and a "env appears once not per version" assertion. Defensive
+  `TestNoLegacyCollision` class fails if anyone partially reverts.
+  Existing plots in `plots/` are left under their old names — only
+  newly-generated plots use the new scheme.
+
+- **db-sync-plot `--metrics tables`: version label is now always visible.**
+  Previously the table-rowcounts plot only put the version in legend entries
+  when comparing multiple versions; for a single-version run the legend
+  showed just bare table names (`block`, `tx`, `tx_out`, …) and the chart
+  title had no version either. The version was only encoded in the
+  filename, which you lose the moment the HTML is opened standalone or
+  shared as a screenshot. Now the version short token (e.g. `13.7.1.0`) is
+  appended to the chart title and to every trace's legend label in both
+  single- and multi-version modes. Legend title is always
+  `"Table / Version"`. `tests/test_plot_rowcounts.py` (new) locks both
+  positions in place; the `cpu_ram` and `ingest` plots already carried the
+  version on their traces and were unaffected.
 
 ## [1.0.0] — 2026-05-26
 

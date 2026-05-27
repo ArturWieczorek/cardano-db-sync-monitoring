@@ -24,6 +24,7 @@ SCRIPTS = [
     "node-plot.py",
     "db-sync-report.py",
     "backup-stats.py",
+    "rename-version.py",
 ]
 
 

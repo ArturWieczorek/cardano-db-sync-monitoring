@@ -42,13 +42,30 @@ class Args:
 
 
 def out_path(outdir: str, env: str, versions: list[str], kind: str, x_axis: str) -> str:
-    """Compose canonical output HTML path. `kind` is the plot type tag."""
+    """Compose canonical output HTML path. `kind` is the plot type tag.
+
+    Filename format: ``<env>_<versions>_<kind>_by_<axis>.html`` — every plot
+    self-describes which env, which run(s), which metric set, and which
+    x-axis it was rendered with, so a file viewed in isolation (downloaded,
+    screenshotted, opened from a directory listing) still tells the reader
+    everything they need to identify it. The env is also the parent
+    directory, but the dir context disappears the moment the file is moved
+    or shared.
+
+    Examples (env=preprod):
+      preprod_13.7.1.0_cpu_ram_by_slot.html
+      preprod_13.7.1.0_cpu_ram_by_time.html
+      preprod_13.7.1.0_ingest_by_time.html
+      preprod_13.7.1.0_tables_by_time.html
+
+    Comparison (two versions; env appears once at the front since the
+    SQLite DB is per-env):
+      preprod_13.6.0.5_vs_13.7.1.0_cpu_ram_by_time.html
+    """
     shorts = [short(v) for v in versions]
-    suffix = "_time" if x_axis == "time" else ""
-    kind_tag = "" if kind == "cpu_ram" else f"_{kind}"
     p = Path(outdir) / env
     p.mkdir(parents=True, exist_ok=True)
-    return str(p / f"{'_vs_'.join(shorts)}{kind_tag}{suffix}.html")
+    return str(p / f"{env}_{'_vs_'.join(shorts)}_{kind}_by_{x_axis}.html")
 
 
 # --- Loaders -----------------------------------------------------------------
@@ -205,16 +222,23 @@ def plot_rowcounts(df: DataFrame, versions: list[str], outdir: str, env: str, x_
     x_label = "Time" if x_axis == "time" else "Slot Number"
     fig = go.Figure()
     # One trace per (version, table) combination. Log y handles the wide range
-    # between block (~10^5) and tx_out (~10^8).
+    # between block (~10^5) and tx_out (~10^8). Version always goes in the
+    # trace name so a single-version plot still tells the reader which run it
+    # came from — the filename and title are easy to lose when the HTML is
+    # opened standalone or pasted as a screenshot.
     for v in versions:
         for tbl in sorted(df[df["version"] == v]["table_name"].unique()):
             d = df[(df["version"] == v) & (df["table_name"] == tbl)].sort_values(x_col)
-            label = f"{tbl} - {v}" if len(versions) > 1 else tbl
+            label = f"{tbl} - {short(v)}"
             fig.add_trace(go.Scatter(x=d[x_col], y=d["row_count"], mode="lines", name=label))
+    version_suffix = " - " + " vs ".join(short(v) for v in versions)
     fig.update_layout(
-        title=dict(text=f"{env} cardano-db-sync - Table Row Counts (approx.)", x=0.5, xanchor="center"),
+        title=dict(
+            text=f"{env} cardano-db-sync - Table Row Counts (approx.){version_suffix}",
+            x=0.5, xanchor="center",
+        ),
         xaxis_title=x_label, yaxis_title="rows (log scale)", yaxis_type="log",
-        legend_title="Table" + (" / Version" if len(versions) > 1 else ""),
+        legend_title="Table / Version",
     )
     path = out_path(outdir, env, versions, "tables", x_axis)
     fig.write_html(path)

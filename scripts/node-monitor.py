@@ -40,7 +40,8 @@ TESTNET_MAGIC_BY_ENV: dict[str, int] = {
 class CardanoNodeMonitor:
     def __init__(self, env: str, node_ver: str, cardano_cli_path: str,
                  cardano_node_path: str, socket_path: str | None,
-                 interval: float, emit_json: bool) -> None:
+                 interval: float, emit_json: bool,
+                 match_arg: str | None = None) -> None:
         self.running: bool = True
         self.env: str = env
         self.node_ver: str = node_ver
@@ -49,6 +50,11 @@ class CardanoNodeMonitor:
         self.socket_path: str | None = socket_path
         self.interval: float = interval
         self.emit_json: bool = emit_json
+        # Optional substring that must appear somewhere in the matched node's
+        # full command line (argv[0] + arguments). Used to disambiguate when
+        # multiple cardano-node instances run on the same host for the same
+        # env (e.g., LSM vs in-memory). None = no extra filter (default).
+        self.match_arg: str | None = match_arg
         self.mainnet: bool = env == "mainnet"
         self.network_magic: int | None = TESTNET_MAGIC_BY_ENV.get(env)
         self.run_label: str = f"cardano-node {node_ver} {env}"
@@ -70,11 +76,15 @@ class CardanoNodeMonitor:
     def _match_node_process(self, proc: Process) -> bool:
         """True if `proc` looks like a cardano-node for our env.
 
-        Two criteria:
+        Criteria:
           - argv[0] basename starts with `self.cardano_node_path` (covers both
             `cardano-node` and version-suffixed binaries like `cardano-node-11.0.1`).
           - some argv arg contains `self.env` (--config preprod/..., --socket-path
             preprod/..., etc.) so we don't grab a different env's node.
+          - if `self.match_arg` is set, the substring must additionally appear
+            anywhere in the full command line (argv[0] including its path + all
+            arguments). Used to pick a specific node when multiple instances of
+            the same env are running (LSM vs in-memory, etc.).
         """
         cmdline = proc.info.get("cmdline") or []
         if not cmdline:
@@ -82,7 +92,11 @@ class CardanoNodeMonitor:
         exe_base = os.path.basename(cmdline[0])
         if not exe_base.startswith(self.cardano_node_path):
             return False
-        return any(self.env in arg for arg in cmdline[1:])
+        if not any(self.env in arg for arg in cmdline[1:]):
+            return False
+        if self.match_arg is not None:
+            return any(self.match_arg in arg for arg in cmdline)
+        return True
 
     def get_process(self) -> Process | None:
         matches = find_processes(self._match_node_process)
@@ -283,6 +297,14 @@ def parse_args() -> argparse.Namespace:
                         action="store_true",
                         help="Emit one JSON object per sample on stdout (instead of the "
                              "human-readable pipe-separated form).")
+    parser.add_argument("--match-arg",
+                        default=None,
+                        help="Additional substring required to appear somewhere in the matched "
+                             "cardano-node process's command line (argv[0] including path + any "
+                             "argument). Use to disambiguate when multiple instances of the same "
+                             "env are running on one host (e.g. --match-arg lsm to pick the LSM "
+                             "node and ignore an in-memory one). If unset, only the env name is "
+                             "used to disambiguate.")
     return parser.parse_args()
 
 
@@ -297,5 +319,6 @@ if __name__ == "__main__":
         socket_path=args.socket_path,
         interval=args.interval,
         emit_json=args.emit_json,
+        match_arg=args.match_arg,
     )
     monitor.run()

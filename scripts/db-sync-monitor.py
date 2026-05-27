@@ -5,6 +5,7 @@ no prompts. See db-sync-plot.py for visualization."""
 
 import argparse
 import json
+import os
 import signal
 import sqlite3
 import sys
@@ -17,7 +18,7 @@ from typing import Any
 
 import psycopg2
 from _common import (
-    find_process,
+    find_processes,
     format_bytes,
     format_duration_compact,
     format_size,
@@ -43,7 +44,8 @@ HOT_TABLES: list[str] = [
 
 class CardanoMonitor:
     def __init__(self, env: str, db_sync_ver: str, pg_host: str | None, pg_port: str | None,
-                 pg_user: str | None, pg_dbname: str, interval: float, emit_json: bool) -> None:
+                 pg_user: str | None, pg_dbname: str, interval: float, emit_json: bool,
+                 match_arg: str | None = None) -> None:
         self.running: bool = True
         self.env: str = env
         self.db_sync_ver: str = db_sync_ver
@@ -54,6 +56,11 @@ class CardanoMonitor:
         self.interval: float = interval
         self.emit_json: bool = emit_json
         self.run_label: str = f"cardano-db-sync {db_sync_ver} {env}"
+        # Optional substring that must appear somewhere in the matched db-sync
+        # process's command line (argv[0] + arguments). Used to disambiguate
+        # when multiple cardano-db-sync instances run on one host (e.g. LSM
+        # vs in-memory). None = no extra filter (default).
+        self.match_arg: str | None = match_arg
         # UTXO probe state.
         self.utxo_tracking: bool = False
         self.utxo_probe_settled: bool = False
@@ -158,10 +165,44 @@ class CardanoMonitor:
             )
             conn.commit()
 
+    def _match_db_sync_process(self, proc: Any) -> bool:
+        """True if `proc` looks like a cardano-db-sync process.
+
+        Criteria:
+          - executable name (argv[0] basename if available, else `proc.name()`)
+            starts with `cardano-db-sync`.
+          - if `self.match_arg` is set, the substring must additionally appear
+            anywhere in the full command line (argv[0] including its path +
+            all arguments). Used to pick a specific instance when multiple
+            db-sync runs share a host (LSM vs in-memory, etc.).
+
+        Note: db-sync doesn't currently encode env-name in argv consistently
+        (different distributions, configs, and --pg-dbname schemes vary), so
+        unlike node-monitor we don't have a built-in env filter here. The
+        --pg-dbname is what scopes db-sync to its postgres database;
+        --match-arg is the explicit handle for picking one of multiple
+        co-located instances.
+        """
+        cmdline = proc.info.get("cmdline") or []
+        if cmdline:
+            exe_base = os.path.basename(cmdline[0])
+        else:
+            exe_base = proc.info.get("name") or ""
+        if not exe_base.startswith("cardano-db-sync"):
+            return False
+        if self.match_arg is not None:
+            return any(self.match_arg in arg for arg in cmdline)
+        return True
+
     def get_process(self) -> Any:
-        return find_process(
-            lambda p: (p.info.get("name") or "").startswith("cardano-db-sync")
-        )
+        matches = find_processes(self._match_db_sync_process)
+        if len(matches) > 1:
+            pids = ", ".join(str(p.pid) for p in matches)
+            warn(
+                f"Multiple cardano-db-sync processes match: {pids}. Using PID {matches[0].pid}. "
+                "Pass --match-arg to disambiguate (substring of argv to require)."
+            )
+        return matches[0] if matches else None
 
     def get_tip(self) -> tuple[int, int | None, int | None, datetime | None] | None:
         """Return (slot_no, epoch_no, block_no, time) of the latest block.
@@ -515,6 +556,13 @@ def parse_args() -> argparse.Namespace:
                         help="Emit one JSON object per sample on stdout (instead of the "
                              "human-readable pipe-separated form). Each line includes env, "
                              "label, and version fields so it parses in isolation.")
+    parser.add_argument("--match-arg",
+                        default=None,
+                        help="Additional substring required to appear somewhere in the matched "
+                             "cardano-db-sync process's command line (argv[0] including path + "
+                             "any argument). Use to disambiguate when multiple instances run on "
+                             "one host (e.g. --match-arg lsm vs --match-arg inmem). If unset, "
+                             "the first cardano-db-sync process found is used.")
     return parser.parse_args()
 
 
@@ -531,5 +579,6 @@ if __name__ == "__main__":
         pg_dbname=args.pg_dbname,
         interval=args.interval,
         emit_json=args.emit_json,
+        match_arg=args.match_arg,
     )
     monitor.run()

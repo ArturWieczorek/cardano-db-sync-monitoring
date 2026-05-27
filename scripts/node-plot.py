@@ -49,12 +49,18 @@ class Args:
 # --- output path -----------------------------------------------------------
 
 def out_path(outdir: str, env: str, versions: list[str], kind: str, x_axis: str) -> str:
+    """Compose canonical output HTML path. `kind` is the plot type tag.
+
+    Filename format: ``<env>_<versions>_<kind>_by_<axis>.html`` — same scheme
+    used by db-sync-plot's out_path; kept identical on purpose so a user
+    browsing plots/cardano-node/ vs plots/cardano-db-sync/ sees the same
+    conventions on both sides, and a file moved out of its parent dir
+    still carries its env in the name.
+    """
     shorts = [short(v) for v in versions]
-    suffix = "_time" if x_axis == "time" else ""
-    kind_tag = "" if kind == "cpu_ram" else f"_{kind}"
     p = Path(outdir) / env
     p.mkdir(parents=True, exist_ok=True)
-    return str(p / f"{'_vs_'.join(shorts)}{kind_tag}{suffix}.html")
+    return str(p / f"{env}_{'_vs_'.join(shorts)}_{kind}_by_{x_axis}.html")
 
 
 # --- loaders ---------------------------------------------------------------

@@ -44,16 +44,21 @@ is actually what you want.
 """
 
 import argparse
+
+# Import sibling module with a hyphen in its name. The type: ignore pair
+# matches the same pattern in tests/test_backup_stats.py — mypy's stubs for
+# importlib.util conservatively type spec_from_file_location as returning
+# `ModuleSpec | None`, and .loader as `Loader | None`. At runtime both are
+# non-None for a real file path, so narrow with ignores rather than asserts.
+import importlib.util
 import sqlite3
 import sys
 from pathlib import Path
 
-# Import sibling module with a hyphen in its name.
-import importlib.util
 _BACKUP_PATH = Path(__file__).resolve().with_name("backup-stats.py")
 _spec = importlib.util.spec_from_file_location("backup_stats", _BACKUP_PATH)
-_backup_stats = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_backup_stats)
+_backup_stats = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
+_spec.loader.exec_module(_backup_stats)  # type: ignore[union-attr]
 backup_db = _backup_stats.backup_db
 
 
@@ -146,7 +151,7 @@ def rename_in_db(
             print(f"    {t}: {n:,}")
 
     if total_from == 0:
-        print(f"  No rows match the source version. Nothing to do.")
+        print("  No rows match the source version. Nothing to do.")
         return 0
 
     if total_to > 0:

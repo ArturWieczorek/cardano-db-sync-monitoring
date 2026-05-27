@@ -567,7 +567,10 @@ def parse_args() -> argparse.Namespace:
 
 
 if __name__ == "__main__":
-    sys.stdout.reconfigure(line_buffering=True)  # type: ignore[union-attr]
+    # Different mypy/typeshed versions report this under different codes
+    # (`attr-defined` on some, `union-attr` on others) because sys.stdout's
+    # declared type changes — list both so the ignore matches either env.
+    sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined,union-attr]
     args = parse_args()
 
     monitor = CardanoMonitor(

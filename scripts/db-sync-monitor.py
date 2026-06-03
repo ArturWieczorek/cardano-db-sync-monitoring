@@ -408,8 +408,8 @@ class CardanoMonitor:
                 "max_tx_id": ingest["max_tx_id"] if ingest else None,
                 "utxo_count": ingest["utxo_count"] if ingest else None,
                 "cpu_percent": cpu["cpu_percent"] if cpu else None,
-                "rss_mb": mem["rss"] if mem else None,
-                "vms_mb": mem["vms"] if mem else None,
+                "rss_mib": mem["rss"] if mem else None,
+                "vms_mib": mem["vms"] if mem else None,
             }
             print(json.dumps(line))
             return

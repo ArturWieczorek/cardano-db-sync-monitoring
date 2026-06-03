@@ -174,8 +174,8 @@ class CardanoNodeMonitor:
                 "era": era,
                 "sync_percent": sync_progress,
                 "cpu_percent": cpu["cpu_percent"] if cpu else None,
-                "rss_mb": mem["rss"] if mem else None,
-                "vms_mb": mem["vms"] if mem else None,
+                "rss_mib": mem["rss"] if mem else None,
+                "vms_mib": mem["vms"] if mem else None,
             }
             print(json.dumps(line))
             return

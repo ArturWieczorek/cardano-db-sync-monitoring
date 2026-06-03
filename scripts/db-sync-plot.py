@@ -119,7 +119,7 @@ def load_ingest(sqlite_file: str, versions: list[str], x_axis: str) -> DataFrame
     dts = df.groupby("version")["ts"].diff().dt.total_seconds()
     df["block_rate"] = df.groupby("version")["max_block_no"].diff() / dts
     df["tx_rate"] = df.groupby("version")["max_tx_id"].diff() / dts
-    df["db_size_mb"] = df["db_size_bytes"] / (1024 * 1024)
+    df["db_size_mib"] = df["db_size_bytes"] / (1024 * 1024)
     df = insert_gap_breaks(df, ["version"])
     return df
 
@@ -135,6 +135,28 @@ def load_rowcounts(sqlite_file: str, versions: list[str], x_axis: str) -> DataFr
         df = pd.read_sql_query(sql, conn, params=versions)
     df["ts"] = pd.to_datetime(df["ts"], errors="coerce")
     df = insert_gap_breaks(df, ["version", "table_name"])
+    return df
+
+
+def load_disk(sqlite_file: str, versions: list[str]) -> DataFrame:
+    """Load `disk_metrics` for the selected versions.
+
+    Written by the separate db-sync-ledger-size-monitor.py collector. `slot_no`
+    is NULL there, so the disk series is always plotted against wall-clock `ts`
+    regardless of --x-axis. Byte counts are converted to GiB for readability
+    and labelled GiB (strict binary unit — not GB, which would overstate by ~7%).
+    """
+    placeholders = ",".join("?" for _ in versions)
+    sql = (
+        "SELECT ts, total_bytes, lsm_bytes, version "
+        f"FROM disk_metrics WHERE version IN ({placeholders}) AND ts IS NOT NULL"
+    )
+    with sqlite3.connect(sqlite_file) as conn:
+        df = pd.read_sql_query(sql, conn, params=versions)
+    df["ts"] = pd.to_datetime(df["ts"], errors="coerce")
+    df["total_gb"] = df["total_bytes"] / 1024**3
+    df["lsm_gb"] = df["lsm_bytes"] / 1024**3
+    df = insert_gap_breaks(df, ["version"])
     return df
 
 
@@ -161,7 +183,7 @@ def plot_cpu_ram(mem_df: DataFrame, cpu_df: DataFrame, versions: list[str],
 
     fig.update_layout(
         title=dict(text=f"{env} cardano-db-sync - Memory & CPU Comparison", x=0.5, xanchor="center"),
-        xaxis_title=x_label, yaxis_title="RSS (MB)",
+        xaxis_title=x_label, yaxis_title="RSS (MiB)",
         xaxis2_title=x_label, yaxis2_title="CPU (%)",
         legend_title="Version",
     )
@@ -177,7 +199,7 @@ def plot_ingest(df: DataFrame, versions: list[str], outdir: str, env: str, x_axi
     rows = 5 if has_utxo else 4
     titles = [
         f"Tip Lag (sec) by {x_label}",
-        f"DB Size (MB) by {x_label}",
+        f"DB Size (MiB) by {x_label}",
         f"Block Insert Rate (blocks/sec) by {x_label}",
         f"Tx Insert Rate (tx/sec) by {x_label}",
     ]
@@ -193,7 +215,7 @@ def plot_ingest(df: DataFrame, versions: list[str], outdir: str, env: str, x_axi
                           row=row, col=1)
 
     add("tip_lag_sec", 1, "TipLag")
-    add("db_size_mb",  2, "DB")
+    add("db_size_mib", 2, "DB")
     add("block_rate",  3, "Blocks/s")
     add("tx_rate",     4, "Tx/s")
     if has_utxo:
@@ -206,7 +228,7 @@ def plot_ingest(df: DataFrame, versions: list[str], outdir: str, env: str, x_axi
     )
     fig.update_xaxes(title_text=x_label, row=rows, col=1)
     fig.update_yaxes(title_text="seconds",    row=1, col=1)
-    fig.update_yaxes(title_text="MB",         row=2, col=1)
+    fig.update_yaxes(title_text="MiB",        row=2, col=1)
     fig.update_yaxes(title_text="blocks/sec", row=3, col=1)
     fig.update_yaxes(title_text="tx/sec",     row=4, col=1)
     if has_utxo:
@@ -245,6 +267,55 @@ def plot_rowcounts(df: DataFrame, versions: list[str], outdir: str, env: str, x_
     print(f"Saved plot to {path}")
 
 
+def plot_disk(df: DataFrame, versions: list[str], outdir: str, env: str) -> None:
+    """On-disk ledger-state size over wall-clock time.
+
+    Row 1 is always the total directory size. Row 2 (the `lsm/` subdir) is
+    added only when at least one selected version actually has an lsm subdir —
+    stock/in-memory builds have none, so `lsm_bytes` is 0 and the second row is
+    omitted entirely rather than drawn as a flat zero line. In a mixed LSM-vs-
+    in-memory comparison the row is shown (the in-memory line sits at zero,
+    which is itself the point).
+
+    Always plotted against `ts`: disk_metrics has no slot_no, and disk growth
+    reads naturally against wall-clock anyway. The filename is tagged `_by_time`
+    accordingly.
+    """
+    # to_numeric coerces the all-None gap-break marker rows to NaN (NaN > 0 is
+    # False) without a fillna downcast warning on the object-dtype column.
+    has_lsm = bool((pd.to_numeric(df["lsm_bytes"], errors="coerce") > 0).any())
+    rows = 2 if has_lsm else 1
+    titles = ["Total Ledger-State Directory Size by Time"]
+    if has_lsm:
+        titles.append("LSM Subdir Size by Time")
+
+    fig = make_subplots(rows=rows, cols=1, shared_xaxes=True,
+                        vertical_spacing=0.1, subplot_titles=titles)
+    for v in versions:
+        d = df[df["version"] == v].sort_values("ts")
+        fig.add_trace(go.Scatter(x=d["ts"], y=d["total_gb"], mode="lines", name=f"Total - {v}"),
+                      row=1, col=1)
+    if has_lsm:
+        for v in versions:
+            d = df[df["version"] == v].sort_values("ts")
+            fig.add_trace(go.Scatter(x=d["ts"], y=d["lsm_gb"], mode="lines", name=f"LSM - {v}"),
+                          row=2, col=1)
+
+    fig.update_layout(
+        title=dict(text=f"{env} cardano-db-sync - On-disk Ledger-State Size", x=0.5, xanchor="center"),
+        legend_title="Version",
+        height=260 * rows + 120,
+    )
+    fig.update_xaxes(title_text="Time", row=rows, col=1)
+    fig.update_yaxes(title_text="GiB", row=1, col=1)
+    if has_lsm:
+        fig.update_yaxes(title_text="GiB", row=2, col=1)
+
+    path = out_path(outdir, env, versions, "disk", "time")
+    fig.write_html(path)
+    print(f"Saved plot to {path}")
+
+
 # --- CLI ---------------------------------------------------------------------
 
 def parse_args() -> Args:
@@ -267,11 +338,13 @@ def parse_args() -> Args:
     parser.add_argument("--x-axis", choices=["slot", "time"], default="slot",
                         help="X-axis: 'slot' (slot_no, default) or 'time' (wall-clock ts). "
                              "Time mode skips rows whose ts is NULL (collected before the ts column existed).")
-    parser.add_argument("--metrics", choices=["cpu_ram", "ingest", "tables", "all"], default="cpu_ram",
+    parser.add_argument("--metrics", choices=["cpu_ram", "ingest", "tables", "disk", "all"], default="cpu_ram",
                         help="Which plot to produce. 'cpu_ram' (default) plots memory and CPU. "
                              "'ingest' plots tip lag, DB size, block/tx rate, UTXO count. "
                              "'tables' plots approximate row counts per hot table. "
-                             "'all' produces one HTML per kind.")
+                             "'disk' plots on-disk ledger-state size over time (total + lsm subdir) "
+                             "from db-sync-ledger-size-monitor.py's disk_metrics table. "
+                             "'all' produces one HTML per kind (disk skipped if not collected).")
     parsed = parser.parse_args()
     sqlite_db = parsed.sqlite_db or str(DEFAULT_DATA_DIR / f"{parsed.env}.db")
     versions = (
@@ -341,6 +414,30 @@ def render_tables(args: Args, chosen: list[str]) -> None:
     plot_rowcounts(df, plottable, args.outdir, args.env, args.x_axis)
 
 
+def render_disk(args: Args, chosen: list[str]) -> None:
+    """Plot on-disk ledger-state size.
+
+    Deliberately a graceful no-op (prints and returns, never raises) when the
+    disk_metrics table or its rows are absent — disk size is collected by a
+    separate, optional collector that most DBs won't have run. That way
+    `--metrics all` keeps producing the cpu_ram/ingest/tables plots for DBs that
+    were never run through db-sync-ledger-size-monitor.py, instead of aborting.
+    """
+    if not has_table(args.sqlite_db, "disk_metrics"):
+        print("Skipping disk plot: no disk_metrics table in this DB "
+              "(run db-sync-ledger-size-monitor.py to collect on-disk sizes).")
+        return
+    df = load_disk(args.sqlite_db, chosen)
+    if df.empty:
+        print("Skipping disk plot: no disk_metrics rows for the selected versions.")
+        return
+    plottable = _filter_versions_with_data(df, chosen, "disk_metrics")
+    if not plottable:
+        print("Skipping disk plot: none of the selected versions have disk_metrics rows.")
+        return
+    plot_disk(df[df["version"].isin(plottable)], plottable, args.outdir, args.env)
+
+
 def main() -> None:
     args = parse_args()
 
@@ -368,7 +465,7 @@ def main() -> None:
             print("Invalid selection. Exiting.")
             return
 
-    kinds = ["cpu_ram", "ingest", "tables"] if args.metrics == "all" else [args.metrics]
+    kinds = ["cpu_ram", "ingest", "tables", "disk"] if args.metrics == "all" else [args.metrics]
     for kind in kinds:
         if kind == "cpu_ram":
             render_cpu_ram(args, chosen)
@@ -376,6 +473,8 @@ def main() -> None:
             render_ingest(args, chosen)
         elif kind == "tables":
             render_tables(args, chosen)
+        elif kind == "disk":
+            render_disk(args, chosen)
 
 
 if __name__ == "__main__":

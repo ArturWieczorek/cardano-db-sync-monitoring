@@ -122,16 +122,16 @@ def main() -> int:
                 continue
             print(f"{db}:")
             for b in backups:
-                size_mb = b.stat().st_size / 1024**2
-                print(f"  {b.name}  ({size_mb:.1f} MB)")
+                size_mib = b.stat().st_size / 1024**2
+                print(f"  {b.name}  ({size_mib:.1f} MiB)")
         return 0
 
     rc = 0
     for db in paths:
         try:
             backup = backup_db(db)
-            size_mb = backup.stat().st_size / 1024**2
-            print(f"Backed up {db}  ->  {backup} ({size_mb:.1f} MB)")
+            size_mib = backup.stat().st_size / 1024**2
+            print(f"Backed up {db}  ->  {backup} ({size_mib:.1f} MiB)")
         except FileNotFoundError as e:  # noqa: PERF203
             # Per-DB try/except is intentional: one missing DB shouldn't abort
             # backing up the others. The loop is at most 2 iterations.

@@ -9,27 +9,31 @@ from _common import (
 
 
 class TestFormatSize:
-    """format_size takes a value in MiB and produces 'X.X MB' or 'X.X GB'."""
+    """format_size takes a value in MiB and produces 'X.X MiB' or 'X.X GiB'.
+
+    Labels are strict binary units (MiB/GiB) because the values are binary
+    (bytes / 1024^n). Calling a GiB a "GB" would overstate it by ~7.4%.
+    """
 
     def test_none(self):
         assert format_size(None) == "N/A"
 
     def test_small(self):
-        assert format_size(123.4) == "123.4 MB"
+        assert format_size(123.4) == "123.4 MiB"
 
-    def test_at_mb_gb_boundary(self):
-        # 1024 MiB == 1 GiB; format promotes to GB.
-        assert format_size(1024.0) == "1.0 GB"
+    def test_at_mib_gib_boundary(self):
+        # 1024 MiB == 1 GiB; format promotes to GiB.
+        assert format_size(1024.0) == "1.0 GiB"
 
-    def test_gb(self):
-        assert format_size(2048.0) == "2.0 GB"
+    def test_gib(self):
+        assert format_size(2048.0) == "2.0 GiB"
 
     def test_zero(self):
-        assert format_size(0.0) == "0.0 MB"
+        assert format_size(0.0) == "0.0 MiB"
 
 
 class TestFormatBytes:
-    """format_bytes promotes through KB → MB → GB → TB."""
+    """format_bytes promotes through KiB → MiB → GiB → TiB (binary units)."""
 
     def test_none(self):
         assert format_bytes(None) == "N/A"
@@ -37,17 +41,17 @@ class TestFormatBytes:
     def test_bytes(self):
         assert format_bytes(512) == "512 B"
 
-    def test_kb(self):
-        assert format_bytes(2048) == "2.00 KB"
+    def test_kib(self):
+        assert format_bytes(2048) == "2.00 KiB"
 
-    def test_mb(self):
-        assert format_bytes(5 * 1024**2) == "5.00 MB"
+    def test_mib(self):
+        assert format_bytes(5 * 1024**2) == "5.00 MiB"
 
-    def test_gb(self):
-        assert format_bytes(7 * 1024**3) == "7.00 GB"
+    def test_gib(self):
+        assert format_bytes(7 * 1024**3) == "7.00 GiB"
 
-    def test_tb(self):
-        assert format_bytes(2 * 1024**4) == "2.00 TB"
+    def test_tib(self):
+        assert format_bytes(2 * 1024**4) == "2.00 TiB"
 
 
 class TestFormatDuration:

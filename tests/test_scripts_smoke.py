@@ -25,6 +25,8 @@ SCRIPTS = [
     "db-sync-report.py",
     "backup-stats.py",
     "rename-version.py",
+    "node-db-size-monitor.py",
+    "db-sync-ledger-size-monitor.py",
 ]
 
 

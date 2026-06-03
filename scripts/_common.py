@@ -44,19 +44,29 @@ def warn(msg: str) -> None:
 # --- formatters ------------------------------------------------------------
 
 def format_size(mib: float | None) -> str:
-    """Format a mebibyte value as 'X.X MB' or 'X.X GB'."""
+    """Format a mebibyte value as 'X.X MiB' or 'X.X GiB'.
+
+    Strict binary units: the input is already in MiB (bytes / 1024^2), so the
+    output is labelled MiB / GiB rather than MB / GB. Calling a 1024-based value
+    "GB" overstates it by ~7.4% (a GiB is 1.074 GB), which is misleading when
+    comparing on-disk / RAM footprints.
+    """
     if mib is None:
         return "N/A"
     if mib >= 1024:
-        return f"{mib / 1024:.1f} GB"
-    return f"{mib:.1f} MB"
+        return f"{mib / 1024:.1f} GiB"
+    return f"{mib:.1f} MiB"
 
 
 def format_bytes(n: int | None) -> str:
-    """Format a raw byte count as 'X.XX [TB|GB|MB|KB|B]'."""
+    """Format a raw byte count as 'X.XX [TiB|GiB|MiB|KiB|B]'.
+
+    Binary units (1024-based) with binary labels, so the suffix matches the
+    divisor exactly — no GiB-labelled-as-GB ambiguity.
+    """
     if n is None:
         return "N/A"
-    for unit, div in (("TB", 1024**4), ("GB", 1024**3), ("MB", 1024**2), ("KB", 1024)):
+    for unit, div in (("TiB", 1024**4), ("GiB", 1024**3), ("MiB", 1024**2), ("KiB", 1024)):
         if n >= div:
             return f"{n / div:.2f} {unit}"
     return f"{n} B"

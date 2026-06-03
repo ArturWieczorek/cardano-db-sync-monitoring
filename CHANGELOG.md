@@ -9,6 +9,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Nothing yet._
 
+## [1.1.0] — 2026-06-03
+
+Adds standalone on-disk size monitoring for both roles — the node's database
+directory and db-sync's ledger-state directory, including the optional `lsm/`
+subdir for LSM-backed builds — plus the plots to compare them, and corrects all
+size/memory units from the SI-labelled `MB`/`GB` to the binary `MiB`/`GiB` they
+were actually computing.
+
+### Added
+
+#### Disk-size collectors (`scripts/node-db-size-monitor.py`, `scripts/db-sync-ledger-size-monitor.py`)
+
+- **On-disk size monitoring for both roles.** Two new standalone collectors
+  measure a directory's apparent size via `du -sb` and append a time series to
+  the role's `data/<role>/<env>.db` under the same version label the matching
+  `*-monitor.py` uses, so the disk curve joins the rest of the run's metrics by
+  `version`:
+  - `node-db-size-monitor.py` measures the node's `--database-path` directory.
+  - `db-sync-ledger-size-monitor.py` measures db-sync's `--state-dir` directory.
+- **`lsm/` subdir tracked separately.** Each sample records both the total
+  directory size and, separately, the size of the `lsm/` subdir. On
+  stock/in-memory builds the subdir is absent, so `lsm_bytes` is simply 0 and
+  the subdir is never even stat-walked — works unchanged for both LSM and stock
+  builds.
+- **Kept separate from the main monitors on purpose.** A `du` of a
+  multi-hundred-GB mainnet directory is a heavy, cache-polluting tree walk, so
+  it runs on its own coarse cadence (`--interval`, default 60s) rather than
+  biasing the 10s CPU/RAM samples — and can be started/stopped independently.
+  `--du-timeout` (default 120s) skips a sample on timeout rather than writing a
+  bogus 0.
+- **Shared core in `scripts/_disk_size.py`.** `DiskSizeMonitor` holds all the
+  common mechanics (schema, sampling, loop, signal handling, summary); the two
+  roles differ only by subclass attributes (`DATA_DIR`, `BINARY_PREFIX`,
+  `PATH_FLAG`, `LABEL_PREFIX`, `ENV_IN_ARGV`). Unit-testable pure helpers
+  `du_bytes` and `parse_path_flag` (the latter handles `--flag value` and
+  `--flag=value`, resolving relative paths against the owning process's CWD).
+- **Auto path discovery.** With no `--path`, the collector finds the owning
+  process and parses the directory out of its argv. `--match-arg` disambiguates
+  when multiple node/db-sync processes run side by side (e.g. an LSM build next
+  to an in-memory one), mirroring the `*-monitor.py` matcher. db-sync takes no
+  env flag, so it matches on the `cardano-db-sync` binary prefix rather than
+  env-in-argv.
+- **`disk_metrics` table** (`ts, slot_no, path, total_bytes, lsm_bytes,
+  version`), created in WAL mode so the disk collector writes concurrently with
+  the main monitor on the same `<env>.db`. `--json` per-sample output, startup
+  history notice, `SIGINT`/`SIGTERM` clean shutdown with a peak/final summary,
+  and line-buffered stdout — same operational conventions as the existing
+  monitors.
+
+#### Plotters (`scripts/db-sync-plot.py`, `scripts/node-plot.py`)
+
+- **`--metrics disk`** on both plotters: on-disk size over wall-clock time, one
+  trace per version. Row 1 is the total directory size; row 2 (the `lsm/`
+  subdir) is added only when at least one selected version actually has an lsm
+  subdir, so stock/in-memory runs aren't padded with a flat zero line — but in
+  a mixed LSM-vs-in-memory comparison the row is shown (the zero line is itself
+  the point). Always plotted against `ts` (disk_metrics has no `slot_no`, and
+  disk growth reads naturally against wall-clock); output filename tagged
+  `_disk_by_time`.
+- **`disk` folded into `--metrics all`** on both plotters, but as a graceful
+  no-op when the `disk_metrics` table or its rows are absent: most DBs won't
+  have run the optional disk collector, so `all` keeps producing the
+  cpu_ram/ingest/tables plots and just prints a "skipping disk" notice instead
+  of aborting the batch.
+
+#### Tests
+
+- **`tests/test_disk_size.py`** — covers the shared core (`du_bytes`,
+  `parse_path_flag`, schema, sampling, lsm-present-vs-absent) and the per-role
+  wiring of both subclasses (label format, target DB path, process matching
+  incl. db-sync's no-env rule), using a fake process so no real processes are
+  needed.
+- **`tests/test_plot_disk.py`** — covers `load_disk` (column shape, GiB
+  conversion, ts parsing, gap-breaks), `plot_disk` (lsm row only when present,
+  one total trace per version, `_disk_by_time` filename), and the explicit
+  regression guard that `--metrics all` still renders the other plots and skips
+  disk without crashing on a DB that has no `disk_metrics`.
+- Both new collectors added to the smoke-test `--help` parametrize list.
+
+### Changed
+
+- **Size and memory units corrected from SI to binary across the board.**
+  Every value the tool computes is binary (bytes / 1024ⁿ), but the labels said
+  `MB`/`GB`/`KB`/`TB`, which overstates a binary value by ~7.4% at the GiB
+  level (a GiB is 1.074 GB). Labels are now the matching binary units:
+  - `_common.py` `format_size` → `MiB`/`GiB`; `format_bytes` →
+    `KiB`/`MiB`/`GiB`/`TiB`.
+  - `db-sync-plot.py` / `node-plot.py` axis titles and the internal
+    `db_size_mb`→`db_size_mib` column → `MiB`/`GiB`.
+  - `db-sync-monitor.py` / `node-monitor.py` `--json` keys `rss_mb`/`vms_mb`
+    renamed to `rss_mib`/`vms_mib`.
+  - `backup-stats.py` / `rename-version.py` backup-size print → `MiB`.
+  - `tests/test_formatters.py` updated to assert the binary labels.
+
 ## [1.0.0] — 2026-05-27
 
 First formal release. The project started as a basic resource collector + a few
@@ -347,5 +441,6 @@ documented internals, and CI.
 
 ---
 
-[Unreleased]: https://github.com/ArturWieczorek/cardano-db-sync-monitoring/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/ArturWieczorek/cardano-db-sync-monitoring/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/ArturWieczorek/cardano-db-sync-monitoring/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/ArturWieczorek/cardano-db-sync-monitoring/releases/tag/v1.0.0

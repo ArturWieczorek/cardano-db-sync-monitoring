@@ -262,8 +262,8 @@ def main() -> int:
 
     if not args.dry_run and not args.no_backup:
         backup = backup_db(db_path)
-        size_mb = backup.stat().st_size / 1024**2
-        print(f"Backed up {db_path}  ->  {backup} ({size_mb:.1f} MB)")
+        size_mib = backup.stat().st_size / 1024**2
+        print(f"Backed up {db_path}  ->  {backup} ({size_mib:.1f} MiB)")
 
     return rename_in_db(
         db_path,

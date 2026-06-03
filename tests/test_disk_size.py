@@ -20,8 +20,8 @@ SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 
 def _load(modname: str, filename: str):
     spec = importlib.util.spec_from_file_location(modname, SCRIPTS / filename)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
     return mod
 
 node_mod = _load("node_db_size_monitor", "node-db-size-monitor.py")

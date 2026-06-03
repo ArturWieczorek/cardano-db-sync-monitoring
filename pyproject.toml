@@ -1,6 +1,6 @@
 [project]
 name = "db-sync-monitoring"
-version = "1.1.0"
+version = "1.2.0"
 description = "Track and visualize Cardano db-sync and cardano-node statistics."
 authors = [{ name = "Artur Wieczorek", email = "artur.wieczorek@iohk.io" }]
 requires-python = ">=3.10"

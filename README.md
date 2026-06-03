@@ -1,12 +1,13 @@
 # cardano-db-sync-monitoring
 
 A/B testing toolkit for `cardano-node` and `cardano-db-sync`: long-running
-resource samplers, on-disk size collectors, plotters with gap-aware rendering,
-postgres-side comparison reports, and supporting utilities (SQLite backup,
-version rename) — with a tested core and CI across Python 3.10–3.12.
+resource samplers, on-disk size collectors, a cardano-node RTS/runtime scraper,
+plotters with gap-aware rendering, postgres-side comparison reports, and
+supporting utilities (SQLite backup, version rename) — with a tested core and CI
+across Python 3.10–3.12.
 
-**Latest release:** [`v1.1.0`](https://github.com/ArturWieczorek/cardano-db-sync-monitoring/releases/tag/v1.1.0)
-— 2026-06-03 — see [`CHANGELOG.md`](CHANGELOG.md) for the full release notes.
+**Latest release:** [`v1.2.0`](https://github.com/ArturWieczorek/cardano-db-sync-monitoring/releases/tag/v1.2.0)
+— 2026-06-04 — see [`CHANGELOG.md`](CHANGELOG.md) for the full release notes.
 
 ---
 
@@ -110,6 +111,20 @@ python3 scripts/db-sync-ledger-size-monitor.py --env preprod --db-sync-ver 13.7.
 
 Coarse cadence by default (`--interval 60`) since `du` is heavy. Match the `--node-ver` / `--db-sync-ver` label to the resource monitor's so the series join. Plot with `--metrics disk`. Full reference: [`# On-disk size monitors`](#on-disk-size-monitors).
 
+### Track cardano-node RTS / runtime metrics (optional, separate collector)
+
+Standalone scraper that polls the node's Prometheus endpoint for GHC runtime gauges (GC, allocations, heap/live bytes, mempool) and appends them to the same `<env>.db` under the same `--node-ver` label. Run alongside `node-monitor.py` when you want the runtime signals psutil can't see (e.g. comparing GC pressure or allocation rates across node versions).
+
+```bash
+# Scrape the node's Prometheus endpoint (default http://127.0.0.1:12798/metrics)
+python3 scripts/node-rts-monitor.py --env preprod --node-ver 11.0.1
+
+# Discover the exact metric names your node exposes, then exit
+python3 scripts/node-rts-monitor.py --env preprod --node-ver 11.0.1 --list-metrics
+```
+
+`node-monitor.py` is left untouched — the scrape is isolated behind a timeout so a slow/dead endpoint just skips the sample. Needs the node run with `+RTS -T` and `hasPrometheus`. Plot with `--metrics rts`. Full reference: [`# RTS / runtime metrics monitor`](#rts--runtime-metrics-monitor).
+
 ### Plot a cardano-node SQLite DB
 
 ```bash
@@ -131,7 +146,10 @@ python3 scripts/node-plot.py --env preprod --versions 10.1.4,11.0.1 --metrics in
 # On-disk db-directory size over time (total + lsm subdir) — needs node-db-size-monitor.py data
 python3 scripts/node-plot.py --env preprod --versions 10.1.4,11.0.1 --metrics disk
 
-# Everything — one HTML per kind (disk skipped if not collected)
+# RTS / runtime gauges (GC, allocations, heap/live, mempool) — needs node-rts-monitor.py data
+python3 scripts/node-plot.py --env preprod --versions 10.1.4,11.0.1 --metrics rts
+
+# Everything — one HTML per kind (disk / rts skipped if not collected)
 python3 scripts/node-plot.py --env preprod --versions 10.1.4,11.0.1 --metrics all
 ```
 
@@ -485,6 +503,44 @@ Optional flags (shared by both):
 Both write a `disk_metrics` table (`ts`, `slot_no`, `path`, `total_bytes`, `lsm_bytes`, `version`) in WAL mode, so a size collector can run concurrently with the resource monitor on the same `<env>.db`. `slot_no` is left NULL — the collector deliberately doesn't query the node/db-sync for a slot — so the series is always plotted against wall-clock time. Visualize it with `db-sync-plot.py --metrics disk` / `node-plot.py --metrics disk` (below).
 
 
+# RTS / runtime metrics monitor
+
+`node-rts-monitor.py` is a standalone collector that scrapes the cardano-node Prometheus endpoint for GHC runtime gauges — GC counts, allocations, heap/live bytes, and mempool — and appends them to the same `data/cardano-node/<env>.db` under the same version label `node-monitor.py` uses, so the RTS curves join the rest of that run's metrics by `version`. These are the resource signals a GHC-version or allocator change shows up in, and that psutil's process-level RSS/CPU can't see.
+
+It's a separate process on purpose: it adds an HTTP scrape per interval, isolated here behind a `--timeout` and a `try/except`, so a slow or unreachable endpoint just skips the sample and never stalls or crashes the psutil/tip sampling `node-monitor.py` does. `node-monitor.py` is left untouched — zero risk to a running mainnet collector.
+
+The node exposes these metrics when run with `+RTS -T` and configured with `hasPrometheus: [host, port]` (default port `12798`). Metric *names* vary by node version and tracing backend, so the collector scrapes the whole endpoint and keeps the names matching a curated substring allowlist (`rts`, `gc`, `alloc`, `heap`, `live`, `mempool`) rather than exact names.
+
+## Run
+
+```bash
+# Auto-uses the default endpoint http://127.0.0.1:12798/metrics
+python3 scripts/node-rts-monitor.py --env preprod --node-ver 11.0.1
+
+# Discovery: print every metric the endpoint exposes (and how many match the
+# allowlist), then exit — use this to find your node's exact metric names
+python3 scripts/node-rts-monitor.py --env preprod --node-ver 11.0.1 --list-metrics
+
+# Background, like the other monitors
+nohup python3 scripts/node-rts-monitor.py \
+  --env preprod --node-ver 11.0.1 \
+  > logs/node-rts-preprod.log 2>&1 &
+```
+
+Match the `--node-ver` label to the one you gave `node-monitor.py` so the RTS series joins the rest of that run's metrics under the same version.
+
+Optional flags:
+- `--prometheus-url` (default `http://127.0.0.1:12798/metrics`) — the node's Prometheus endpoint. For multiple nodes on one host, pass each instance's distinct port.
+- `--include` (default `rts,gc,alloc,heap,live,mempool`) — comma-separated case-insensitive substrings; a metric is kept if its name contains any of them.
+- `--interval` (default `10`) — sampling interval in seconds; the scrape is light.
+- `--timeout` (default `5`) — per-scrape HTTP timeout in seconds; on timeout the sample is skipped.
+- `--list-metrics` — scrape once, print everything the endpoint exposes, then exit.
+- `--json` — emit one JSON object per sample (`ts`, `env`, `label`, `version`, `slot_no`, `metrics`).
+- `--sqlite-db` — override the target SQLite DB path.
+
+It writes an `rts_metrics` table (`ts`, `slot_no`, `metric`, `value`, `version`) in WAL mode, so it can run concurrently with the resource monitor on the same `<env>.db`. The table is intentionally long/narrow — one row per (sample, metric) — so any metric name works without schema churn. `slot_no` is stamped from the node's `slotNum` gauge, so the series can share the slot x-axis with the other node metrics. Visualize it with `node-plot.py --metrics rts` (below).
+
+
 # `db-sync-plot.py`
 
 Reads the SQLite stats DB and writes a comparison HTML into `plots/cardano-db-sync/<env>/`.
@@ -604,7 +660,8 @@ python3 scripts/node-plot.py --env preprod --versions 10.1.4,11.0.1 --x-axis tim
 | `cpu_ram` (default) | RSS and CPU% over slot_no (or wall-clock with `--x-axis time`) |
 | `ingest` | Sync time by era (top bar chart) + sync duration per epoch (line). Reads from `node_ingest_metrics` written by the updated `node-monitor.py`. |
 | `disk` | On-disk db-directory size over time (total + `lsm/` subdir), from the `disk_metrics` table written by `node-db-size-monitor.py` |
-| `all` | Produces one HTML per kind (`disk` is skipped with a notice if its table wasn't collected) |
+| `rts` | GHC RTS / runtime gauges (GC, allocations, heap/live bytes, mempool) — one subplot per metric, one line per version — from the `rts_metrics` table written by `node-rts-monitor.py` |
+| `all` | Produces one HTML per kind (`disk` and `rts` are each skipped with a notice if their table wasn't collected) |
 
 ```bash
 # Sync time by era + per-epoch duration, two versions overlaid

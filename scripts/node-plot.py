@@ -8,7 +8,9 @@ Metric sets:
   ingest:             Sync time by era (bar) + sync duration per epoch (line).
   disk:               On-disk db-directory size over time (total + lsm subdir),
                       from the separate node-db-size-monitor.py collector.
-  all:                Produces one HTML per kind (disk skipped if not collected).
+  rts:                GHC RTS / runtime gauges (GC, allocations, heap/live bytes,
+                      mempool) from the separate node-rts-monitor.py collector.
+  all:                One HTML per kind (disk / rts skipped if not collected).
 """
 
 import argparse
@@ -138,6 +140,27 @@ def load_disk(sqlite_file: str, versions: list[str]) -> DataFrame:
     df["total_gb"] = df["total_bytes"] / 1024**3
     df["lsm_gb"] = df["lsm_bytes"] / 1024**3
     df = insert_gap_breaks(df, ["version"])
+    return df
+
+
+def load_rts(sqlite_file: str, versions: list[str], x_axis: str) -> DataFrame:
+    """Load `rts_metrics` (long/narrow: one row per sample per metric) for the
+    selected versions. Written by the separate node-rts-monitor.py collector.
+
+    Gap breaks are inserted per (version, metric) so an outage breaks each
+    metric's line independently. `slot_no` is populated from the node's
+    slotNum gauge, so both --x-axis slot and time work.
+    """
+    placeholders = ",".join("?" for _ in versions)
+    ts_filter = " AND ts IS NOT NULL" if x_axis == "time" else ""
+    sql = (
+        "SELECT ts, slot_no, metric, value, version "
+        f"FROM rts_metrics WHERE version IN ({placeholders}){ts_filter}"
+    )
+    with sqlite3.connect(sqlite_file) as conn:
+        df = pd.read_sql_query(sql, conn, params=versions)
+    df["ts"] = pd.to_datetime(df["ts"], errors="coerce")
+    df = insert_gap_breaks(df, ["version", "metric"])
     return df
 
 
@@ -320,6 +343,43 @@ def plot_disk(df: DataFrame, versions: list[str], outdir: str, env: str) -> None
     print(f"Saved plot to {path}")
 
 
+def plot_rts(df: DataFrame, versions: list[str], outdir: str, env: str, x_axis: str) -> None:
+    """One subplot per distinct RTS metric (sorted by name), each overlaying one
+    line per version. Values are plotted raw as scraped (counts for GC numbers,
+    bytes for heap/live/allocated, etc.) — each metric has its own y-axis, so
+    mixed units across subplots are fine; the subplot title is the metric name.
+    """
+    x_col = "ts" if x_axis == "time" else "slot_no"
+    x_label = "Time" if x_axis == "time" else "Slot Number"
+    metrics = sorted(m for m in df["metric"].dropna().unique())
+    rows = max(1, len(metrics))
+
+    fig = make_subplots(
+        rows=rows, cols=1, shared_xaxes=True,
+        # Keep spacing under plotly's 1/(rows-1) cap even for ~10 metrics.
+        vertical_spacing=min(0.06, 0.8 / max(1, rows - 1)),
+        subplot_titles=metrics,
+    )
+    for i, metric in enumerate(metrics, start=1):
+        for v in versions:
+            d = df[(df["version"] == v) & (df["metric"] == metric)].sort_values(x_col)
+            fig.add_trace(
+                go.Scatter(x=d[x_col], y=d["value"], mode="lines", name=f"{metric} - {short(v)}"),
+                row=i, col=1,
+            )
+
+    fig.update_layout(
+        title=dict(text=f"{env} cardano-node - RTS / Runtime Metrics", x=0.5, xanchor="center"),
+        legend_title="Metric / Version",
+        height=220 * rows + 120,
+    )
+    fig.update_xaxes(title_text=x_label, row=rows, col=1)
+
+    path = out_path(outdir, env, versions, "rts", x_axis)
+    fig.write_html(path)
+    print(f"Saved plot to {path}")
+
+
 # --- CLI -------------------------------------------------------------------
 
 def parse_args() -> Args:
@@ -342,13 +402,15 @@ def parse_args() -> Args:
     parser.add_argument("--x-axis", choices=["slot", "time"], default="slot",
                         help="X-axis for cpu_ram mode: 'slot' (slot_no, default) or 'time' "
                              "(wall-clock ts). Ingest mode always uses epoch on x.")
-    parser.add_argument("--metrics", choices=["cpu_ram", "ingest", "disk", "all"], default="cpu_ram",
+    parser.add_argument("--metrics", choices=["cpu_ram", "ingest", "disk", "rts", "all"], default="cpu_ram",
                         help="Which plot to produce. 'cpu_ram' (default) plots memory and CPU. "
                              "'ingest' plots sync time by era (bar) + sync duration per epoch "
                              "(line) — needs the post-refactor monitor's node_ingest_metrics table. "
                              "'disk' plots on-disk db-directory size over time (total + lsm subdir) "
                              "from node-db-size-monitor.py's disk_metrics table. "
-                             "'all' produces one per kind (disk skipped if not collected).")
+                             "'rts' plots GHC RTS / runtime gauges (GC, allocations, heap/live, "
+                             "mempool) from node-rts-monitor.py's rts_metrics table. "
+                             "'all' produces one per kind (disk / rts skipped if not collected).")
     parsed = parser.parse_args()
     sqlite_db = parsed.sqlite_db or str(DEFAULT_DATA_DIR / f"{parsed.env}.db")
     versions = (
@@ -435,6 +497,26 @@ def render_disk(args: Args, chosen: list[str]) -> None:
     plot_disk(df[df["version"].isin(plottable)], plottable, args.outdir, args.env)
 
 
+def render_rts(args: Args, chosen: list[str]) -> None:
+    """Plot RTS/runtime metrics. Graceful no-op (prints, never raises) when the
+    rts_metrics table or the selected versions' rows are absent — the RTS
+    collector is optional, so `--metrics all` keeps producing the other plots
+    for DBs that were never run through node-rts-monitor.py."""
+    if not has_table(args.sqlite_db, "rts_metrics"):
+        print("Skipping rts plot: no rts_metrics table in this DB "
+              "(run node-rts-monitor.py to collect RTS/runtime metrics).")
+        return
+    df = load_rts(args.sqlite_db, chosen, args.x_axis)
+    if df.empty:
+        print("Skipping rts plot: no rts_metrics rows for the selected versions.")
+        return
+    plottable = _filter_versions_with_data(df, chosen, "rts_metrics")
+    if not plottable:
+        print("Skipping rts plot: none of the selected versions have rts_metrics rows.")
+        return
+    plot_rts(df[df["version"].isin(plottable)], plottable, args.outdir, args.env, args.x_axis)
+
+
 def main() -> None:
     args = parse_args()
 
@@ -462,7 +544,7 @@ def main() -> None:
             print("Invalid selection. Exiting.")
             return
 
-    kinds = ["cpu_ram", "ingest", "disk"] if args.metrics == "all" else [args.metrics]
+    kinds = ["cpu_ram", "ingest", "disk", "rts"] if args.metrics == "all" else [args.metrics]
     for kind in kinds:
         if kind == "cpu_ram":
             render_cpu_ram(args, chosen)
@@ -470,6 +552,8 @@ def main() -> None:
             render_ingest(args, chosen)
         elif kind == "disk":
             render_disk(args, chosen)
+        elif kind == "rts":
+            render_rts(args, chosen)
 
 
 if __name__ == "__main__":

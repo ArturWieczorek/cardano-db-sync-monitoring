@@ -9,6 +9,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Nothing yet._
 
+## [1.2.0] — 2026-06-04
+
+Adds a standalone cardano-node RTS/runtime metrics collector — GHC GC,
+allocations, heap/live bytes, and mempool, scraped from the node's Prometheus
+endpoint — plus the plot to compare those curves across versions. `node-monitor.py`
+is untouched: the scrape is isolated behind a timeout, so it carries zero risk
+to a running resource collector.
+
+### Added
+
+#### RTS/runtime collector (`scripts/node-rts-monitor.py`)
+
+- **RTS/runtime monitoring for cardano-node.** A new standalone collector
+  scrapes the node's Prometheus endpoint (default
+  `http://127.0.0.1:12798/metrics`) and appends a `(metric, value)` time series
+  to the same `data/cardano-node/<env>.db` under the same version label
+  `node-monitor.py` uses, so the RTS curves join the rest of the run's metrics
+  by `version`. Captures the runtime signals psutil can't — GC counts /
+  allocations / heap & live bytes (where a GHC-version or allocator change shows
+  up) plus mempool gauges.
+- **Kept separate from `node-monitor.py` on purpose — zero risk.** It adds an
+  HTTP scrape per interval, isolated behind `--timeout` and a `try/except`, so a
+  slow or unreachable endpoint just skips the sample and can never stall or
+  crash the psutil/tip sampling `node-monitor.py` does. `node-monitor.py` is
+  left completely untouched.
+- **Robust to metric-name variation.** Names vary by node version / tracing
+  backend, so the collector scrapes the whole endpoint and keeps the names
+  matching a curated case-insensitive substring allowlist (`rts`, `gc`, `alloc`,
+  `heap`, `live`, `mempool`, override with `--include`) rather than exact names.
+  `--list-metrics` prints everything the endpoint currently exposes (and how
+  many match the allowlist) so you can discover your node's exact names.
+- **Long/narrow `rts_metrics` table** (`ts`, `slot_no`, `metric`, `value`,
+  `version`) — one row per (sample, metric) — so any metric name works without
+  schema churn. Created in WAL mode so it writes concurrently with the main
+  monitor on the same `<env>.db`. `slot_no` is stamped from the node's `slotNum`
+  gauge so the series can share the slot x-axis with the other node metrics.
+  Non-finite values (`NaN`/`±Inf`) are dropped so they can't poison plots.
+- **Mempool folded into the same script, not a second one.** The generic
+  key/value table makes a mempool gauge just another allowlist entry; a separate
+  script would only re-scrape the same endpoint for no reason.
+- `--json` per-sample output, startup history notice, `--interval` (default 10s,
+  the scrape is light), `SIGINT`/`SIGTERM` clean shutdown with a sample-count
+  summary, and line-buffered stdout — same operational conventions as the
+  existing monitors.
+
+#### Plotter (`scripts/node-plot.py`)
+
+- **`--metrics rts`**: one subplot per distinct RTS metric (sorted by name),
+  each overlaying one line per version. Values are plotted raw as scraped
+  (counts for GC numbers, bytes for heap/live/allocated), each metric on its own
+  y-axis. Honors `--x-axis slot` (default) and `--x-axis time` — `slot_no` is
+  populated from the node's `slotNum` gauge — and gap-breaks each metric's line
+  independently on an outage. Output filename tagged `_rts_by_<x-axis>`.
+- **`rts` folded into `--metrics all`** as a graceful no-op when the
+  `rts_metrics` table or the selected versions' rows are absent: the RTS
+  collector is optional, so `all` keeps producing the other plots and just
+  prints a "skipping rts" notice — same guarantee as `disk`.
+
+#### Tests
+
+- **`tests/test_rts_monitor.py`** — covers Prometheus text parsing (labels,
+  comments, trailing timestamps, non-finite rejection), the substring allowlist
+  (new-tracing `cardano_node_metrics_RTS_*` and old-EKG `rts_gc_*` shapes), slot
+  extraction, the monkeypatched-`urlopen` fetch (success and failure-returns-None
+  without raising), and schema/`record()` insertion against a tmp SQLite DB.
+- **`tests/test_plot_rts.py`** — covers `load_rts` (column shape, per-metric
+  gap-breaks), `plot_rts` (one subplot/trace per metric, `_rts_by_slot` /
+  `_rts_by_time` filename), `render_rts` graceful-skip when the optional table or
+  rows are absent, and the `--metrics all` guard proving `all` neither crashes
+  without rts data nor omits the rts HTML once present.
+- `node-rts-monitor.py` added to the smoke-test `--help` parametrize list.
+
 ## [1.1.0] — 2026-06-03
 
 Adds standalone on-disk size monitoring for both roles — the node's database
@@ -450,6 +522,7 @@ documented internals, and CI.
 
 ---
 
-[Unreleased]: https://github.com/ArturWieczorek/cardano-db-sync-monitoring/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/ArturWieczorek/cardano-db-sync-monitoring/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/ArturWieczorek/cardano-db-sync-monitoring/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/ArturWieczorek/cardano-db-sync-monitoring/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/ArturWieczorek/cardano-db-sync-monitoring/releases/tag/v1.0.0

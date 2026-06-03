@@ -27,6 +27,7 @@ SCRIPTS = [
     "rename-version.py",
     "node-db-size-monitor.py",
     "db-sync-ledger-size-monitor.py",
+    "node-rts-monitor.py",
 ]
 
 

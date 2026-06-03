@@ -1,12 +1,12 @@
 # cardano-db-sync-monitoring
 
 A/B testing toolkit for `cardano-node` and `cardano-db-sync`: long-running
-resource samplers, plotters with gap-aware rendering, postgres-side comparison
-reports, and supporting utilities (SQLite backup, version rename) — with a
-tested core and CI across Python 3.10–3.12.
+resource samplers, on-disk size collectors, plotters with gap-aware rendering,
+postgres-side comparison reports, and supporting utilities (SQLite backup,
+version rename) — with a tested core and CI across Python 3.10–3.12.
 
-**Latest release:** [`v1.0.0`](https://github.com/ArturWieczorek/cardano-db-sync-monitoring/releases/tag/v1.0.0)
-— 2026-05-27 — see [`CHANGELOG.md`](CHANGELOG.md) for the full release notes.
+**Latest release:** [`v1.1.0`](https://github.com/ArturWieczorek/cardano-db-sync-monitoring/releases/tag/v1.1.0)
+— 2026-06-03 — see [`CHANGELOG.md`](CHANGELOG.md) for the full release notes.
 
 ---
 
@@ -96,6 +96,20 @@ python3 scripts/db-sync-monitor.py \
 
 Each version-under-test gets its own `--pg-dbname` AND a distinct `--db-sync-ver` label. Same env (e.g. `preprod`) means everything lands in the same SQLite stats DB (`data/cardano-db-sync/preprod.db`), where the version labels keep runs separated. Full reference: [`# db-sync-monitor.py`](#db-sync-monitorpy).
 
+### Track on-disk size (optional, separate collector)
+
+Standalone collectors that sample a directory's `du` size over time, into the same `<env>.db` under the same version label. Run alongside the resource monitor when you care about on-disk growth (e.g. comparing an LSM build's footprint against an in-memory one).
+
+```bash
+# cardano-node db directory (auto-discovers --database-path)
+python3 scripts/node-db-size-monitor.py --env preprod --node-ver 11.0.1
+
+# cardano-db-sync ledger-state directory (auto-discovers --state-dir)
+python3 scripts/db-sync-ledger-size-monitor.py --env preprod --db-sync-ver 13.7.1.0
+```
+
+Coarse cadence by default (`--interval 60`) since `du` is heavy. Match the `--node-ver` / `--db-sync-ver` label to the resource monitor's so the series join. Plot with `--metrics disk`. Full reference: [`# On-disk size monitors`](#on-disk-size-monitors).
+
 ### Plot a cardano-node SQLite DB
 
 ```bash
@@ -114,7 +128,10 @@ python3 scripts/node-plot.py --env preprod --versions 11.0.1 --x-axis time
 # Sync time by era (bar) + sync duration per epoch (line)
 python3 scripts/node-plot.py --env preprod --versions 10.1.4,11.0.1 --metrics ingest
 
-# Everything — CPU/RSS plot + ingest plot (two HTML files)
+# On-disk db-directory size over time (total + lsm subdir) — needs node-db-size-monitor.py data
+python3 scripts/node-plot.py --env preprod --versions 10.1.4,11.0.1 --metrics disk
+
+# Everything — one HTML per kind (disk skipped if not collected)
 python3 scripts/node-plot.py --env preprod --versions 10.1.4,11.0.1 --metrics all
 ```
 
@@ -140,7 +157,10 @@ python3 scripts/db-sync-plot.py --env preprod --versions 13.6.0.5,13.7.1.0 \
 python3 scripts/db-sync-plot.py --env preprod --versions 13.6.0.5,13.7.1.0 \
   --metrics tables --x-axis time
 
-# Everything at once — produces three HTML files (cpu_ram, ingest, tables)
+# On-disk ledger-state size over time (total + lsm subdir) — needs db-sync-ledger-size-monitor.py data
+python3 scripts/db-sync-plot.py --env preprod --versions 13.6.0.5,13.7.1.0 --metrics disk
+
+# Everything at once — one HTML per kind (cpu_ram, ingest, tables, disk; disk skipped if not collected)
 python3 scripts/db-sync-plot.py --env preprod --versions 13.6.0.5,13.7.1.0 \
   --metrics all --x-axis time
 ```
@@ -279,7 +299,7 @@ CPU and RAM metrics are sampled via [`psutil`](https://psutil.readthedocs.io/).
 | `swap` | Amount of swap memory the process is using. |
 | `shared` | Amount of memory shared with other processes. |
 
-Memory values are computed in mebibytes (`bytes / 1024²`) and stored that way in SQLite, but displayed in the console and graph axes labelled as **MB** to match `htop` / `top` / Activity Monitor conventions. The console auto-promotes to **GB** when a value crosses 1024 MB.
+Memory values are computed in mebibytes (`bytes / 1024²`) and stored that way in SQLite. Because the values are binary (1024-based), the console and graph axes label them with the matching **binary units** — **MiB**, promoting to **GiB** once a value crosses 1024 MiB. (Earlier releases labelled these **MB**/**GB**; that overstated a binary value by ~7.4% at the GiB level, since 1 GiB = 1.074 GB. The `--json` output now uses `rss_mib` / `vms_mib` keys to match.)
 
 ## 🖥️ CPU Metrics
 | Metric | Description |
@@ -309,10 +329,10 @@ Long-running collector for a `cardano-db-sync` process. Writes samples to `data/
 python3 scripts/db-sync-monitor.py --env preprod --db-sync-ver 13.6.0.5 --pg-dbname preprod_13.6.0.5_metrics
 === db-sync monitor | env=preprod | label=13.6.0.5 | pg_db=preprod_13.6.0.5_metrics | interval=10.0s ===
 UTXO tracking: DISABLED — set tx-out.use_address_table or consumed_by_tx_id in your db-sync config to enable. utxo_count will not be sampled.
-Slot 171760 | Epoch 3 | Sync 1.98% | TipLag 12d | DB 142.3MB | CPU 3.9% | RSS 110.3 MB
-Slot 420580 | Epoch 9 | Sync 2.25% | TipLag 11d | DB 198.7MB | CPU 69.9% | RSS 111.8 MB
-Slot 673880 | Epoch 15 | Sync 2.53% | TipLag 10d | DB 244.1MB | CPU 72.8% | RSS 111.8 MB
-Slot 911700 | Epoch 21 | Sync 2.79% | TipLag 9.4d | DB 285.0MB | CPU 71.0% | RSS 112.2 MB
+Slot 171760 | Epoch 3 | Sync 1.98% | TipLag 12d | DB 142.30 MiB | CPU 3.9% | RSS 110.3 MiB
+Slot 420580 | Epoch 9 | Sync 2.25% | TipLag 11d | DB 198.70 MiB | CPU 69.9% | RSS 111.8 MiB
+Slot 673880 | Epoch 15 | Sync 2.53% | TipLag 10d | DB 244.10 MiB | CPU 72.8% | RSS 111.8 MiB
+Slot 911700 | Epoch 21 | Sync 2.79% | TipLag 9.4d | DB 285.00 MiB | CPU 71.0% | RSS 112.2 MiB
 ^C
 Shutting down. Wrote 1248 samples to /…/data/cardano-db-sync/preprod.db.
 ```
@@ -332,7 +352,7 @@ Required:
 Optional:
 - `--pg-host`, `--pg-port`, `--pg-user` — Postgres connection overrides. If unset, the script honors the standard `PGHOST` / `PGPORT` / `PGUSER` / `PGPASSWORD` env vars (the same convention `psql` uses), falling back to psycopg2's defaults (`localhost` / `5432` / current user).
 - `--interval` (default `10`) — sampling interval in seconds.
-- `--json` — emit one JSON object per sample on stdout (instead of the human-readable pipe-separated form). Each line includes `env`, `label`, `version`, `slot_no`, `epoch_no`, `sync_percent`, `tip_lag_sec`, `db_size_bytes`, `max_tx_id`, `utxo_count`, `cpu_percent`, `rss_mb`. Drop into `jq` / fluentd / any log analyzer without re-parsing.
+- `--json` — emit one JSON object per sample on stdout (instead of the human-readable pipe-separated form). Each line includes `env`, `label`, `version`, `slot_no`, `epoch_no`, `sync_percent`, `tip_lag_sec`, `db_size_bytes`, `max_tx_id`, `utxo_count`, `cpu_percent`, `rss_mib`. Drop into `jq` / fluentd / any log analyzer without re-parsing.
 - `--match-arg <substring>` — extra disambiguator when multiple `cardano-db-sync` processes share a host (e.g. LSM vs in-memory builds). The substring must appear somewhere in the matched process's command line (argv[0] including its full path + any argument); a short unique token like `lsm` or `inmem` works. Without this flag, the first `cardano-db-sync` process found wins, which can be the wrong one if more than one is running. See [Disambiguating multiple processes per env](#disambiguating-multiple-processes-per-env) below.
 
 ```bash
@@ -395,8 +415,8 @@ Same idea as `db-sync-monitor.py`, but tracks a running `cardano-node` process. 
 ```sh
 $ python3 scripts/node-monitor.py --env preprod --node-ver 10.1.4
 === cardano-node monitor | env=preprod | label=10.1.4 | interval=10.0s ===
-Slot 1234567 | Epoch 543 | Era Conway | Sync 100.00% | CPU 65.2% | RSS 4.4 GB
-Slot 1234580 | Epoch 543 | Era Conway | Sync 100.00% | CPU 67.8% | RSS 4.4 GB
+Slot 1234567 | Epoch 543 | Era Conway | Sync 100.00% | CPU 65.2% | RSS 4.4 GiB
+Slot 1234580 | Epoch 543 | Era Conway | Sync 100.00% | CPU 67.8% | RSS 4.4 GiB
 ...
 ^C
 Shutting down. Wrote 1248 samples to /…/data/cardano-node/preprod.db.
@@ -411,7 +431,7 @@ Optional:
 - `--cardano-node-path` — match a non-default node executable name/path.
 - `--socket-path` — override the node socket; usually auto-detected from the process command line.
 - `--interval` — sampling interval in seconds (default `10`).
-- `--json` — emit one JSON object per sample on stdout (instead of the pipe-separated form). Same shape as `db-sync-monitor.py --json`, with `slot_no`, `epoch_no`, `era`, `sync_percent`, `cpu_percent`, `rss_mb`, etc.
+- `--json` — emit one JSON object per sample on stdout (instead of the pipe-separated form). Same shape as `db-sync-monitor.py --json`, with `slot_no`, `epoch_no`, `era`, `sync_percent`, `cpu_percent`, `rss_mib`, etc.
 - `--match-arg <substring>` — extra disambiguator when multiple `cardano-node` processes share a host. The env name (`preprod`, `mainnet`, etc.) is already required to appear in argv as the first-level filter; `--match-arg` adds a second substring that must also appear (in any arg or in argv[0]'s path). See [Disambiguating multiple processes per env](#disambiguating-multiple-processes-per-env) below.
 
 At startup the monitor reports whether the chosen version label already has samples in the SQLite DB (same notice as `db-sync-monitor.py`), so you can tell at a glance whether you're starting fresh or extending an earlier session.
@@ -428,6 +448,41 @@ Each interval writes one row to each of these SQLite tables:
 | `node_version` | one row per sample tagged with the version label |
 
 `node_ingest_metrics` was added after the original `memory_metrics`/`cpu_metrics` schema. Older runs in the DB don't have rows there; `--metrics ingest` will warn and skip those versions cleanly. New runs from this point on collect full data.
+
+
+# On-disk size monitors
+
+`node-db-size-monitor.py` and `db-sync-ledger-size-monitor.py` are standalone collectors that track how big a directory grows on disk over a run — the cardano-node database directory (`--database-path`) and the cardano-db-sync ledger-state directory (`--state-dir`), respectively — and append the series to the same `data/<role>/<env>.db` under the same version label the matching `*-monitor.py` uses, so the disk curve joins the rest of that run's metrics.
+
+They're separate processes on purpose: a `du` of a multi-hundred-GB mainnet directory is a heavy, cache-polluting tree walk, so it runs on its own coarse cadence (default 60s) rather than biasing the 10-second CPU/RAM samples — and can be started and stopped independently. Each sample records the total directory size **and**, separately, the size of the optional `lsm/` subdir, so an LSM-backed build's on-disk footprint can be compared against a stock/in-memory one. On a build with no `lsm/` subdir the LSM figure is simply 0 and the subdir is never even walked.
+
+## Run
+
+```bash
+# cardano-node db directory — auto-discovers --database-path from the running node
+python3 scripts/node-db-size-monitor.py --env preprod --node-ver 11.0.1
+
+# cardano-db-sync ledger-state directory — auto-discovers --state-dir from db-sync
+python3 scripts/db-sync-ledger-size-monitor.py --env preprod --db-sync-ver 13.7.1.0
+
+# Background, like the other monitors
+nohup python3 scripts/db-sync-ledger-size-monitor.py \
+  --env preprod --db-sync-ver 13.7.1.0 \
+  > logs/db-sync-ledger-size-preprod.log 2>&1 &
+```
+
+Match the `--node-ver` / `--db-sync-ver` label to the one you gave the matching `*-monitor.py` so the disk series joins the rest of that run's metrics under the same version.
+
+Optional flags (shared by both):
+- `--path` — measure this directory directly instead of auto-discovering it from the running process's command line.
+- `--interval` (default `60`) — sampling interval in seconds. `du` is heavy; keep it coarse.
+- `--du-timeout` (default `120`) — per-`du` timeout in seconds; on timeout the sample is skipped rather than recording a bogus 0.
+- `--lsm-subdir` (default `lsm`) — name of the subdir measured separately.
+- `--json` — emit one JSON object per sample (`ts`, `env`, `label`, `version`, `path`, `total_bytes`, `lsm_bytes`).
+- `--match-arg <substring>` — disambiguate when multiple node/db-sync processes are running, same as the resource monitors. db-sync takes no env flag, so it's matched on the `cardano-db-sync` binary prefix plus this substring.
+- `--sqlite-db` — override the target SQLite DB path.
+
+Both write a `disk_metrics` table (`ts`, `slot_no`, `path`, `total_bytes`, `lsm_bytes`, `version`) in WAL mode, so a size collector can run concurrently with the resource monitor on the same `<env>.db`. `slot_no` is left NULL — the collector deliberately doesn't query the node/db-sync for a slot — so the series is always plotted against wall-clock time. Visualize it with `db-sync-plot.py --metrics disk` / `node-plot.py --metrics disk` (below).
 
 
 # `db-sync-plot.py`
@@ -465,7 +520,8 @@ Default behavior plots memory + CPU. Pick a different metric set with `--metrics
 | `cpu_ram` (default) | RSS and CPU% — same as before |
 | `ingest` | Tip lag, DB size, block insert rate, tx insert rate, UTXO set size (if enabled) |
 | `tables` | Approximate row counts per hot table on a log y-axis (one line per table per version) |
-| `all` | Produces one HTML for each of the three above |
+| `disk` | On-disk ledger-state size over time (total + `lsm/` subdir), from the `disk_metrics` table written by `db-sync-ledger-size-monitor.py` |
+| `all` | Produces one HTML for each of the above (`disk` is skipped with a notice if its table wasn't collected) |
 
 ```bash
 # ingest metrics over time (what's the new version doing?)
@@ -478,7 +534,7 @@ python3 scripts/db-sync-plot.py --env preprod --versions 13.6.0.5,13.6.0.5-hasql
 python3 scripts/db-sync-plot.py --env preprod --versions 13.6.0.5 --metrics all --x-axis time
 ```
 
-Output filenames follow the scheme `<env>_<versions>_<metrics>_by_<x-axis>.html` — every plot self-describes which env, which run(s), which metric set, and which x-axis it was rendered with, so a file viewed in isolation (downloaded, screenshotted, picked out of a directory listing) still tells you what it is even when the parent dir context is gone. Examples for a single version on preprod: `preprod_13.7.1.0_cpu_ram_by_time.html`, `preprod_13.7.1.0_ingest_by_time.html`, `preprod_13.7.1.0_tables_by_slot.html`. A two-version comparison adds `_vs_` (env stays at the front, once): `preprod_13.6.0.5_vs_13.7.1.0_cpu_ram_by_time.html`. If you select `ingest` or `tables` against a DB that was collected before these tables existed, the script bails with an explicit error pointing at the monitor.
+Output filenames follow the scheme `<env>_<versions>_<metrics>_by_<x-axis>.html` — every plot self-describes which env, which run(s), which metric set, and which x-axis it was rendered with, so a file viewed in isolation (downloaded, screenshotted, picked out of a directory listing) still tells you what it is even when the parent dir context is gone. Examples for a single version on preprod: `preprod_13.7.1.0_cpu_ram_by_time.html`, `preprod_13.7.1.0_ingest_by_time.html`, `preprod_13.7.1.0_tables_by_slot.html`, `preprod_13.7.1.0_disk_by_time.html` (the disk plot is always `_by_time` — `disk_metrics` has no slot). A two-version comparison adds `_vs_` (env stays at the front, once): `preprod_13.6.0.5_vs_13.7.1.0_cpu_ram_by_time.html`. If you select `ingest` or `tables` against a DB that was collected before these tables existed, the script bails with an explicit error pointing at the monitor; `disk` instead skips gracefully (it's an optional, separately-collected metric — see below).
 
 ### Missing-data warning when comparing versions
 
@@ -496,7 +552,7 @@ The plot scripts break their lines across sampling gaps. After loading samples f
 
 Without this, a multi-session sync (or any monitor restart) produced a misleading near-vertical "cliff" connecting the last sample of one session to the first of the next, even when there was no data between them. The gap break now reads correctly as "no data here" instead of "memory dropped 2 GB instantly".
 
-This applies to `cpu_ram`, `ingest`, and `tables` modes, and to both `--x-axis slot` and `--x-axis time`. Gap detection always uses wall-clock `ts`, regardless of which axis you plot against.
+This applies to `cpu_ram`, `ingest`, `tables`, and `disk` modes, and to both `--x-axis slot` and `--x-axis time`. Gap detection always uses wall-clock `ts`, regardless of which axis you plot against.
 
 ## Time-axis mode
 
@@ -547,7 +603,8 @@ python3 scripts/node-plot.py --env preprod --versions 10.1.4,11.0.1 --x-axis tim
 |:---|:---|
 | `cpu_ram` (default) | RSS and CPU% over slot_no (or wall-clock with `--x-axis time`) |
 | `ingest` | Sync time by era (top bar chart) + sync duration per epoch (line). Reads from `node_ingest_metrics` written by the updated `node-monitor.py`. |
-| `all` | Produces both HTML files |
+| `disk` | On-disk db-directory size over time (total + `lsm/` subdir), from the `disk_metrics` table written by `node-db-size-monitor.py` |
+| `all` | Produces one HTML per kind (`disk` is skipped with a notice if its table wasn't collected) |
 
 ```bash
 # Sync time by era + per-epoch duration, two versions overlaid
@@ -657,22 +714,22 @@ The UTXO-tracking probe also runs under a 5-second `statement_timeout`, so if th
 
 ```sh
 Database: preprod_13.6.0.5_metrics
-Total size: 1147 MB
+Total size: 1.12 GiB
 
 Table sizes:
-  public.block                             → 252 MB
-  public.tx_out                            → 241 MB
-  public.tx_metadata                       → 170 MB
-  public.tx                                → 96 MB
-  public.datum                             → 89 MB
-  public.ma_tx_out                         → 83 MB
-  public.tx_in                             → 59 MB
-  public.script                            → 38 MB
-  public.multi_asset                       → 32 MB
-  public.ma_tx_mint                        → 20 MB
-  public.redeemer                          → 17 MB
-  public.redeemer_data                     → 8584 kB
-  public.collateral_tx_in                  → 6840 kB
+  public.block                             → 252.00 MiB
+  public.tx_out                            → 241.00 MiB
+  public.tx_metadata                       → 170.00 MiB
+  public.tx                                → 96.00 MiB
+  public.datum                             → 89.00 MiB
+  public.ma_tx_out                         → 83.00 MiB
+  public.tx_in                             → 59.00 MiB
+  public.script                            → 38.00 MiB
+  public.multi_asset                       → 32.00 MiB
+  public.ma_tx_mint                        → 20.00 MiB
+  public.redeemer                          → 17.00 MiB
+  public.redeemer_data                     → 8.38 MiB
+  public.collateral_tx_in                  → 6.68 MiB
   ...
 ```
 

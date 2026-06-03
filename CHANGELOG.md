@@ -103,6 +103,15 @@ were actually computing.
   - `backup-stats.py` / `rename-version.py` backup-size print → `MiB`.
   - `tests/test_formatters.py` updated to assert the binary labels.
 
+### Documentation
+
+- **README** updated for this release: latest-release banner bumped to
+  `v1.1.0`, a new "On-disk size monitors" section documenting both collectors
+  and the `disk_metrics` table, `--metrics disk` added to both plotters' metric
+  tables and quickstarts, and all sample output / units switched to MiB/GiB
+  (including the `db-sync-report.py` size-report example and the `--json` key
+  names).
+
 ## [1.0.0] — 2026-05-27
 
 First formal release. The project started as a basic resource collector + a few

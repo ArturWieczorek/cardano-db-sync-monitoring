@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-06-16
+
+Adds the SQLite stats-report tooling: per-environment InMemory-vs-LSM comparison
+reports for both cardano-db-sync and cardano-node (`db-sync-stats-report.py` /
+`node-stats-report.py`, sharing `scripts/_report.py`), a cross-role
+`stats-summary.py` text overview, a slot axis for the on-disk size plots, and an
+extensive `docs/` set (07-13). Also renames the monitors and the Postgres report
+to state their purpose, and hardens the collectors (shared SQLite write timeout,
+a single source of truth for version-keyed tables).
+
 ### Added
 
 - **Slot axis for the on-disk size plots (`--metrics disk --x-axis slot`).** The
@@ -708,7 +718,8 @@ documented internals, and CI.
 
 ---
 
-[Unreleased]: https://github.com/ArturWieczorek/cardano-db-sync-monitoring/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/ArturWieczorek/cardano-db-sync-monitoring/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/ArturWieczorek/cardano-db-sync-monitoring/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/ArturWieczorek/cardano-db-sync-monitoring/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/ArturWieczorek/cardano-db-sync-monitoring/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/ArturWieczorek/cardano-db-sync-monitoring/releases/tag/v1.0.0

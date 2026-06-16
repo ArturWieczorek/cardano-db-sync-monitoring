@@ -1,6 +1,6 @@
 # Bump these revs when you bump the corresponding versions in pyproject.toml
 # (or when ruff/mypy themselves release a major upgrade you want to pick up).
-# Keep them roughly in sync with what `uv.lock` resolves to.
+# Keep them roughly in sync with what `requirements.lock` resolves to.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.14

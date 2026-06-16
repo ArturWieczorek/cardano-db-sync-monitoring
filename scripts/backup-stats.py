@@ -9,7 +9,7 @@ Why this exists rather than just `cp`: SQLite is configured in WAL mode, so a
 naive filesystem copy of `foo.db` misses any pending data in `foo.db-wal` that
 hasn't been checkpointed yet. `sqlite3 .backup` (and Python's
 `Connection.backup()` equivalent) drains the WAL into a fresh single-file
-snapshot — safe to run while the monitor is writing.
+snapshot - safe to run while the monitor is writing.
 
 Usage examples:
 
@@ -90,17 +90,17 @@ def resolve_paths(args: argparse.Namespace) -> list[Path]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Backup the SQLite stats databases produced by the monitors."
+    parser = argparse.ArgumentParser(description="Backup the SQLite stats databases produced by the monitors.")
+    parser.add_argument(
+        "--env", choices=["mainnet", "preprod", "preview"], help="Environment name. Locates data/<role>/<env>.db."
     )
-    parser.add_argument("--env", choices=["mainnet", "preprod", "preview"],
-                        help="Environment name. Locates data/<role>/<env>.db.")
-    parser.add_argument("--role", choices=["node", "db-sync"],
-                        help="Which role's DB to back up. Default: both (when --env is given).")
-    parser.add_argument("--path",
-                        help="Backup a specific DB file (overrides --env/--role).")
-    parser.add_argument("--list", dest="list_only", action="store_true",
-                        help="List existing backups for the selected DB(s) and exit.")
+    parser.add_argument(
+        "--role", choices=["node", "db-sync"], help="Which role's DB to back up. Default: both (when --env is given)."
+    )
+    parser.add_argument("--path", help="Backup a specific DB file (overrides --env/--role).")
+    parser.add_argument(
+        "--list", dest="list_only", action="store_true", help="List existing backups for the selected DB(s) and exit."
+    )
     args = parser.parse_args()
 
     if not args.path and not args.env:

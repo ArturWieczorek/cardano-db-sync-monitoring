@@ -1,8 +1,8 @@
 """Postgres queries for the cardano-db-sync report.
 
-Imported by db-sync-report.py. Stays focused on data acquisition: opens
+Imported by db-sync-epoch-report.py. Stays focused on data acquisition: opens
 connections, runs SQL, returns DataFrames / scalars / dicts. No plotting or
-file-writing logic here — those belong in db-sync-report.py.
+file-writing logic here - those belong in db-sync-epoch-report.py.
 
 All query functions take a live psycopg2 connection as their first parameter
 so the caller can scope a single connection across multiple fetches per DB
@@ -26,6 +26,7 @@ pd.set_option("future.no_silent_downcasting", True)
 
 # --- connection / introspection helpers ------------------------------------
 
+
 @contextmanager
 def pg_connect(
     pg_host: str | None,
@@ -36,7 +37,7 @@ def pg_connect(
 ) -> Iterator[psycopg2.extensions.connection]:
     """Context-managed psycopg2 connection that always closes on exit.
 
-    psycopg2's own `with` only commits/rollbacks — it does NOT close. We always
+    psycopg2's own `with` only commits/rollbacks - it does NOT close. We always
     close because each report invocation opens at most a handful of connections.
 
     `None` host/port/user fall back to psycopg2's env-var defaults (PGHOST,
@@ -80,7 +81,7 @@ def utxo_tracking_enabled(conn: psycopg2.extensions.connection) -> bool:
         return bool(row and row[0])
     except psycopg2.errors.QueryCanceled:
         dbname = conn.info.dbname if hasattr(conn, "info") else "(unknown)"
-        print(f"UTXO tracking probe timed out (>5s) for '{dbname}' — assuming DISABLED.")
+        print(f"UTXO tracking probe timed out (>5s) for '{dbname}' - assuming DISABLED.")
         conn.rollback()
         return False
 
@@ -92,7 +93,7 @@ def query_df(
 ) -> pd.DataFrame:
     """Execute SQL via psycopg2 and return a DataFrame.
 
-    Bypasses pd.read_sql_query — pandas warns that psycopg2 connections aren't
+    Bypasses pd.read_sql_query - pandas warns that psycopg2 connections aren't
     in its officially-tested set even though they work. This helper avoids the
     warning without adding a SQLAlchemy dependency.
     """
@@ -105,16 +106,18 @@ def query_df(
 
 # --- per-epoch fetchers ----------------------------------------------------
 
+
 def fetch_epoch_stats(conn: psycopg2.extensions.connection, with_p95: bool) -> pd.DataFrame:
     """Per-epoch tx-level stats: block_count, tx_count, fees, output, sizes.
 
     p95_tx_size is gated behind --with-p95 because PERCENTILE_CONT sorts every
-    tx.size in each epoch group — minutes on mainnet (~100M tx rows). When
+    tx.size in each epoch group - minutes on mainnet (~100M tx rows). When
     not requested, the column is omitted from the SELECT entirely.
     """
     p95_select = (
         ",\n          COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY t.size), 0)::float AS p95_tx_size"
-        if with_p95 else ""
+        if with_p95
+        else ""
     )
     sql = f"""
       SELECT
@@ -191,8 +194,7 @@ def fetch_epoch_distinct_assets(conn: psycopg2.extensions.connection) -> pd.Data
 def fetch_epoch_rewards(conn: psycopg2.extensions.connection) -> pd.DataFrame:
     return query_df(
         conn,
-        "SELECT earned_epoch AS epoch_no, COUNT(*) AS reward_count "
-        "FROM reward GROUP BY earned_epoch;",
+        "SELECT earned_epoch AS epoch_no, COUNT(*) AS reward_count FROM reward GROUP BY earned_epoch;",
     )
 
 
@@ -234,8 +236,8 @@ def fetch_epoch_conway(conn: psycopg2.extensions.connection) -> pd.DataFrame | N
 def fetch_era_sync(conn: psycopg2.extensions.connection) -> pd.DataFrame:
     """Sync time aggregated by Cardano era.
 
-    Era is derived from `epoch_param.protocol_major` — the protocol version
-    that's *actually active* for each epoch (the ledger state) — not from
+    Era is derived from `epoch_param.protocol_major` - the protocol version
+    that's *actually active* for each epoch (the ledger state) - not from
     `block.proto_major` which is per-block producer signaling and can advertise
     the next-upgrade version many epochs before the hard fork activates.
 
@@ -256,10 +258,17 @@ def fetch_era_sync(conn: psycopg2.extensions.connection) -> pd.DataFrame:
     """
     raw = query_df(conn, sql)
     if raw.empty:
-        return pd.DataFrame(columns=[
-            "era", "epoch_from", "epoch_to", "epochs",
-            "total_sync_secs", "avg_sync_secs", "pct_of_total",
-        ])
+        return pd.DataFrame(
+            columns=[
+                "era",
+                "epoch_from",
+                "epoch_to",
+                "epochs",
+                "total_sync_secs",
+                "avg_sync_secs",
+                "pct_of_total",
+            ]
+        )
     raw["era"] = raw["proto"].apply(era_for)
     raw["sync_secs"] = raw["sync_secs"].fillna(0).astype(float)
     grouped = (
@@ -286,8 +295,7 @@ def assemble_epoch_df(
 ) -> pd.DataFrame:
     """Build the per-epoch DataFrame, optionally skipping expensive fetchers."""
     df = fetch_epoch_stats(conn, with_p95=with_p95)
-    fetchers: list[Any] = [fetch_epoch_sync_secs, fetch_epoch_mints,
-                           fetch_epoch_rewards, fetch_epoch_stakes]
+    fetchers: list[Any] = [fetch_epoch_sync_secs, fetch_epoch_mints, fetch_epoch_rewards, fetch_epoch_stakes]
     if not skip_slow:
         fetchers[1:1] = [fetch_epoch_plutus]
         fetchers.insert(2, fetch_epoch_distinct_assets)
@@ -303,6 +311,7 @@ def assemble_epoch_df(
 
 
 # --- DB / table / index sizes ---------------------------------------------
+
 
 def fetch_db_size(conn: psycopg2.extensions.connection) -> int:
     with conn.cursor() as cur:
@@ -348,8 +357,7 @@ def fetch_reltuples(conn: psycopg2.extensions.connection, tables: list[str]) -> 
     """Cheap ANALYZE-driven row-count estimates from pg_class. Avoids COUNT(*)."""
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT relname, reltuples::bigint FROM pg_class "
-            "WHERE relkind = 'r' AND relname = ANY(%s);",
+            "SELECT relname, reltuples::bigint FROM pg_class WHERE relkind = 'r' AND relname = ANY(%s);",
             (tables,),
         )
         return {row[0]: int(row[1]) for row in cur.fetchall()}
@@ -407,7 +415,8 @@ def build_summary(
 
     return {
         "total_sync_secs": total_sync_secs,
-        "slot_min": slot_min, "slot_max": slot_max,
+        "slot_min": slot_min,
+        "slot_max": slot_max,
         "epoch_min": int(epoch_df["epoch_no"].min()) if not epoch_df.empty else None,
         "epoch_max": int(epoch_df["epoch_no"].max()) if not epoch_df.empty else None,
         "total_blocks": total_blocks,

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Long-running collector for cardano-db-sync. Samples CPU/RAM, ingest metrics,
-and hot-table row counts into a SQLite stats DB. Pure collector — no plotting,
+and hot-table row counts into a SQLite stats DB. Pure collector - no plotting,
 no prompts. See db-sync-plot.py for visualization."""
 
 import argparse
@@ -18,6 +18,7 @@ from typing import Any
 
 import psycopg2
 from _common import (
+    connect_writer,
     find_processes,
     format_bytes,
     format_duration_compact,
@@ -37,15 +38,31 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 # Tables sampled for approximate row counts every interval.
 # Uses pg_class.reltuples (cheap, ANALYZE-driven estimate) rather than COUNT(*).
 HOT_TABLES: list[str] = [
-    "block", "tx", "tx_out", "ma_tx_out", "ma_tx_mint",
-    "multi_asset", "datum", "redeemer", "script",
+    "block",
+    "tx",
+    "tx_out",
+    "ma_tx_out",
+    "ma_tx_mint",
+    "multi_asset",
+    "datum",
+    "redeemer",
+    "script",
 ]
 
 
 class CardanoMonitor:
-    def __init__(self, env: str, db_sync_ver: str, pg_host: str | None, pg_port: str | None,
-                 pg_user: str | None, pg_dbname: str, interval: float, emit_json: bool,
-                 match_arg: str | None = None) -> None:
+    def __init__(
+        self,
+        env: str,
+        db_sync_ver: str,
+        pg_host: str | None,
+        pg_port: str | None,
+        pg_user: str | None,
+        pg_dbname: str,
+        interval: float,
+        emit_json: bool,
+        match_arg: str | None = None,
+    ) -> None:
         self.running: bool = True
         self.env: str = env
         self.db_sync_ver: str = db_sync_ver
@@ -73,7 +90,7 @@ class CardanoMonitor:
         # on the retry path). Set lazily by _ensure_loop_conn(); dropped and
         # re-opened on the next sample if a connection-level error occurs.
         # Setup-phase queries (wait_for_schema, detect_utxo_tracking) keep
-        # their own short-lived connections — wait_for_schema runs before
+        # their own short-lived connections - wait_for_schema runs before
         # the loop, and detect_utxo_tracking uses SET LOCAL statement_timeout
         # which requires an explicit transaction (incompatible with autocommit).
         self._loop_conn: psycopg2.extensions.connection | None = None
@@ -86,7 +103,7 @@ class CardanoMonitor:
         """Raw psycopg2.connect with our pg_* settings + caller overrides.
 
         Honors PGHOST/PGPORT/PGUSER/PGPASSWORD env vars when the CLI args are
-        unset (None) — same convention as `psql`. Always supplies `dbname`
+        unset (None) - same convention as `psql`. Always supplies `dbname`
         because there's no PGDATABASE convention that fits multi-version A/B.
         """
         conn_kwargs: dict[str, Any] = {"dbname": self.pg_dbname}
@@ -103,7 +120,7 @@ class CardanoMonitor:
     def _pg(self, **kwargs: Any) -> Iterator[psycopg2.extensions.connection]:
         """Short-lived context-managed connection (closes on exit).
 
-        Used by setup-phase queries — wait_for_schema (polls before postgres
+        Used by setup-phase queries - wait_for_schema (polls before postgres
         may be ready) and detect_utxo_tracking (uses SET LOCAL which requires
         an explicit transaction). For the steady-state sample loop, use
         _ensure_loop_conn() instead so we don't open a fresh TCP connection
@@ -122,12 +139,12 @@ class CardanoMonitor:
         get_first_block_time, get_ingest_metrics, get_table_rowcounts) so the
         monitor doesn't open ~3-4 new TCP connections per sample. Opened
         lazily on first call; reopened automatically if the connection has
-        been dropped (e.g. postgres restart, network blip) — the
+        been dropped (e.g. postgres restart, network blip) - the
         connection-level exception handlers in each query call
         `_drop_loop_conn()`, and the next sample's call here re-opens.
 
         Autocommit is on so each query commits immediately and doesn't hold a
-        long-running transaction across the loop — important to let postgres
+        long-running transaction across the loop - important to let postgres
         clean up dead tuples (vacuum) without waiting on the monitor's
         snapshot.
         """
@@ -151,7 +168,7 @@ class CardanoMonitor:
 
     def init_db(self) -> None:
         init_sqlite_schema(self.db_file, version_table="db_sync_version")
-        with sqlite3.connect(self.db_file) as conn:
+        with connect_writer(self.db_file) as conn:
             c = conn.cursor()
             c.execute(
                 """CREATE TABLE IF NOT EXISTS ingest_metrics
@@ -178,7 +195,7 @@ class CardanoMonitor:
 
         Note: db-sync doesn't currently encode env-name in argv consistently
         (different distributions, configs, and --pg-dbname schemes vary), so
-        unlike node-monitor we don't have a built-in env filter here. The
+        unlike node-resource-monitor we don't have a built-in env filter here. The
         --pg-dbname is what scopes db-sync to its postgres database;
         --match-arg is the explicit handle for picking one of multiple
         co-located instances.
@@ -207,7 +224,7 @@ class CardanoMonitor:
     def get_tip(self) -> tuple[int, int | None, int | None, datetime | None] | None:
         """Return (slot_no, epoch_no, block_no, time) of the latest block.
 
-        Uses the indexed reverse scan on block_no — fast on any size DB.
+        Uses the indexed reverse scan on block_no - fast on any size DB.
         Uses the shared loop connection (autocommit); on a connection-level
         error, drops it so the next sample reopens.
         """
@@ -238,10 +255,7 @@ class CardanoMonitor:
         try:
             conn = self._ensure_loop_conn()
             with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT time FROM block WHERE block_no IS NOT NULL "
-                    "ORDER BY block_no ASC LIMIT 1;"
-                )
+                cur.execute("SELECT time FROM block WHERE block_no IS NOT NULL ORDER BY block_no ASC LIMIT 1;")
                 r = cur.fetchone()
             return r[0] if r else None
         except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
@@ -297,7 +311,7 @@ class CardanoMonitor:
         """Update self.utxo_tracking / self.utxo_probe_settled.
 
         Verdict is definitive only once tx_out has rows. db-sync populates
-        consumed_by_tx_id at insert time, not retroactively — so if tx_out
+        consumed_by_tx_id at insert time, not retroactively - so if tx_out
         has any rows and none of them have the marker, tracking is
         permanently off for this run. Until tx_out has rows, we keep probing.
         """
@@ -340,15 +354,13 @@ class CardanoMonitor:
         """DB size, max tx id, UTXO count if enabled.
 
         Tip lag and max_block_no are derived from get_tip()'s return value in
-        run() — no extra query needed here. Keeping this method to one or two
+        run() - no extra query needed here. Keeping this method to one or two
         cheap queries is what makes mainnet-safe sampling possible.
         """
         try:
             conn = self._ensure_loop_conn()
             with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT pg_database_size(current_database()), (SELECT MAX(id) FROM tx);"
-                )
+                cur.execute("SELECT pg_database_size(current_database()), (SELECT MAX(id) FROM tx);")
                 row = cur.fetchone()
                 result: dict[str, Any] = {
                     "db_size_bytes": int(row[0]) if row and row[0] is not None else None,
@@ -374,8 +386,7 @@ class CardanoMonitor:
             conn = self._ensure_loop_conn()
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT relname, reltuples::bigint FROM pg_class "
-                    "WHERE relkind = 'r' AND relname = ANY(%s);",
+                    "SELECT relname, reltuples::bigint FROM pg_class WHERE relkind = 'r' AND relname = ANY(%s);",
                     (HOT_TABLES,),
                 )
                 return {row[0]: int(row[1]) for row in cur.fetchall()}
@@ -390,9 +401,18 @@ class CardanoMonitor:
     def stop(self, *_args: Any) -> None:
         self.running = False
 
-    def emit_sample(self, *, ts: str, slot: int, epoch: int | None, sync_progress: float | None,
-                    tip_lag_sec: float | None, mem: dict[str, float] | None,
-                    cpu: dict[str, Any] | None, ingest: dict[str, Any] | None) -> None:
+    def emit_sample(
+        self,
+        *,
+        ts: str,
+        slot: int,
+        epoch: int | None,
+        sync_progress: float | None,
+        tip_lag_sec: float | None,
+        mem: dict[str, float] | None,
+        cpu: dict[str, Any] | None,
+        ingest: dict[str, Any] | None,
+    ) -> None:
         """Format a single sample for stdout (json or pipe-separated)."""
         if self.emit_json:
             line = {
@@ -476,46 +496,86 @@ class CardanoMonitor:
             tbl_counts = self.get_table_rowcounts()
             ts = datetime.now().isoformat()
 
-            with sqlite3.connect(self.db_file) as conn:
-                if mem:
+            try:
+                with connect_writer(self.db_file) as conn:
+                    if mem:
+                        conn.execute(
+                            "INSERT INTO memory_metrics (ts, slot_no, rss, vms, uss, pss, swap, shared, version) "
+                            "VALUES (?,?,?,?,?,?,?,?,?)",
+                            (
+                                ts,
+                                slot,
+                                mem["rss"],
+                                mem["vms"],
+                                mem["uss"],
+                                mem["pss"],
+                                mem["swap"],
+                                mem["shared"],
+                                self.run_label,
+                            ),
+                        )
+                    if cpu:
+                        conn.execute(
+                            "INSERT INTO cpu_metrics (ts, slot_no, cpu_percent, user_time, system_time, "
+                            "children_user, children_system, iowait, ctx_switches, interrupts, version) "
+                            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                            (
+                                ts,
+                                slot,
+                                cpu["cpu_percent"],
+                                cpu["user_time"],
+                                cpu["system_time"],
+                                cpu["children_user"],
+                                cpu["children_system"],
+                                cpu["iowait"],
+                                cpu["ctx_switches"],
+                                cpu["interrupts"],
+                                self.run_label,
+                            ),
+                        )
                     conn.execute(
-                        "INSERT INTO memory_metrics (ts, slot_no, rss, vms, uss, pss, swap, shared, version) "
-                        "VALUES (?,?,?,?,?,?,?,?,?)",
-                        (ts, slot, mem["rss"], mem["vms"], mem["uss"],
-                         mem["pss"], mem["swap"], mem["shared"], self.run_label),
+                        "INSERT INTO db_sync_version VALUES (?,?)",
+                        (ts, self.run_label),
                     )
-                if cpu:
-                    conn.execute(
-                        "INSERT INTO cpu_metrics (ts, slot_no, cpu_percent, user_time, system_time, "
-                        "children_user, children_system, iowait, ctx_switches, interrupts, version) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                        (ts, slot, cpu["cpu_percent"], cpu["user_time"], cpu["system_time"],
-                         cpu["children_user"], cpu["children_system"],
-                         cpu["iowait"], cpu["ctx_switches"], cpu["interrupts"], self.run_label),
-                    )
-                conn.execute(
-                    "INSERT INTO db_sync_version VALUES (?,?)",
-                    (ts, self.run_label),
-                )
-                if ingest:
-                    conn.execute(
-                        "INSERT INTO ingest_metrics (ts, slot_no, version, tip_lag_sec, "
-                        "db_size_bytes, max_block_no, max_tx_id, utxo_count) "
-                        "VALUES (?,?,?,?,?,?,?,?)",
-                        (ts, slot, self.run_label, tip_lag_sec, ingest["db_size_bytes"],
-                         max_block_no, ingest["max_tx_id"], ingest["utxo_count"]),
-                    )
-                if tbl_counts:
-                    conn.executemany(
-                        "INSERT INTO table_rowcounts (ts, slot_no, version, table_name, row_count) "
-                        "VALUES (?,?,?,?,?)",
-                        [(ts, slot, self.run_label, name, count) for name, count in tbl_counts.items()],
-                    )
+                    if ingest:
+                        conn.execute(
+                            "INSERT INTO ingest_metrics (ts, slot_no, version, tip_lag_sec, "
+                            "db_size_bytes, max_block_no, max_tx_id, utxo_count) "
+                            "VALUES (?,?,?,?,?,?,?,?)",
+                            (
+                                ts,
+                                slot,
+                                self.run_label,
+                                tip_lag_sec,
+                                ingest["db_size_bytes"],
+                                max_block_no,
+                                ingest["max_tx_id"],
+                                ingest["utxo_count"],
+                            ),
+                        )
+                    if tbl_counts:
+                        conn.executemany(
+                            "INSERT INTO table_rowcounts (ts, slot_no, version, table_name, row_count) "
+                            "VALUES (?,?,?,?,?)",
+                            [(ts, slot, self.run_label, name, count) for name, count in tbl_counts.items()],
+                        )
+            except sqlite3.OperationalError as e:
+                # Another writer held the lock past the busy timeout (rare). Drop
+                # this one sample with a warning rather than killing a multi-day run.
+                warn(f"DB busy, dropped sample at {ts}: {e}")
+                time.sleep(self.interval)
+                continue
 
             rows += 1
             self.emit_sample(
-                ts=ts, slot=slot, epoch=epoch, sync_progress=sync_progress,
-                tip_lag_sec=tip_lag_sec, mem=mem, cpu=cpu, ingest=ingest,
+                ts=ts,
+                slot=slot,
+                epoch=epoch,
+                sync_progress=sync_progress,
+                tip_lag_sec=tip_lag_sec,
+                mem=mem,
+                cpu=cpu,
+                ingest=ingest,
             )
             time.sleep(self.interval)
 
@@ -527,49 +587,39 @@ class CardanoMonitor:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Cardano DB-Sync resources monitor (collector)")
-    parser.add_argument("--env",
-                        required=True,
-                        choices=["mainnet", "preprod", "preview"],
-                        help="Environment name")
-    parser.add_argument("--db-sync-ver",
-                        required=True,
-                        help="Label used to tag this run in the DB (e.g. 13.6.0.5, 13.6.0.5-hasql)")
-    parser.add_argument("--pg-host",
-                        default=None,
-                        help="Postgres host (default: PGHOST env var, then 'localhost')")
-    parser.add_argument("--pg-port",
-                        default=None,
-                        help="Postgres port (default: PGPORT env var, then 5432)")
-    parser.add_argument("--pg-user",
-                        default=None,
-                        help="Postgres user (default: PGUSER env var, then current user)")
-    parser.add_argument("--pg-dbname",
-                        required=True,
-                        help="Postgres database name that cardano-db-sync writes to")
-    parser.add_argument("--interval",
-                        type=float,
-                        default=10.0,
-                        help="Sampling interval in seconds (default: 10)")
-    parser.add_argument("--json",
-                        dest="emit_json",
-                        action="store_true",
-                        help="Emit one JSON object per sample on stdout (instead of the "
-                             "human-readable pipe-separated form). Each line includes env, "
-                             "label, and version fields so it parses in isolation.")
-    parser.add_argument("--match-arg",
-                        default=None,
-                        help="Additional substring required to appear somewhere in the matched "
-                             "cardano-db-sync process's command line (argv[0] including path + "
-                             "any argument). Use to disambiguate when multiple instances run on "
-                             "one host (e.g. --match-arg lsm vs --match-arg inmem). If unset, "
-                             "the first cardano-db-sync process found is used.")
+    parser.add_argument("--env", required=True, choices=["mainnet", "preprod", "preview"], help="Environment name")
+    parser.add_argument(
+        "--db-sync-ver", required=True, help="Label used to tag this run in the DB (e.g. 13.6.0.5, 13.6.0.5-hasql)"
+    )
+    parser.add_argument("--pg-host", default=None, help="Postgres host (default: PGHOST env var, then 'localhost')")
+    parser.add_argument("--pg-port", default=None, help="Postgres port (default: PGPORT env var, then 5432)")
+    parser.add_argument("--pg-user", default=None, help="Postgres user (default: PGUSER env var, then current user)")
+    parser.add_argument("--pg-dbname", required=True, help="Postgres database name that cardano-db-sync writes to")
+    parser.add_argument("--interval", type=float, default=10.0, help="Sampling interval in seconds (default: 10)")
+    parser.add_argument(
+        "--json",
+        dest="emit_json",
+        action="store_true",
+        help="Emit one JSON object per sample on stdout (instead of the "
+        "human-readable pipe-separated form). Each line includes env, "
+        "label, and version fields so it parses in isolation.",
+    )
+    parser.add_argument(
+        "--match-arg",
+        default=None,
+        help="Additional substring required to appear somewhere in the matched "
+        "cardano-db-sync process's command line (argv[0] including path + "
+        "any argument). Use to disambiguate when multiple instances run on "
+        "one host (e.g. --match-arg lsm vs --match-arg inmem). If unset, "
+        "the first cardano-db-sync process found is used.",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     # Different mypy/typeshed versions report this under different codes
     # (`attr-defined` on some, `union-attr` on others) because sys.stdout's
-    # declared type changes — list both so the ignore matches either env.
+    # declared type changes - list both so the ignore matches either env.
     sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined,union-attr]
     args = parse_args()
 

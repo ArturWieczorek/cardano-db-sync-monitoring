@@ -1,4 +1,4 @@
-"""Tests for resolve_versions — the --versions CLI input → full-label mapping."""
+"""Tests for resolve_versions - the --versions CLI input → full-label mapping."""
 
 import pytest
 from _common import resolve_versions
@@ -27,9 +27,7 @@ class TestResolveVersions:
         ]
 
     def test_mixed_full_and_short(self):
-        chosen = resolve_versions(
-            ["cardano-db-sync 13.6.0.5 preprod", "13.7.1.0-hasql"], AVAILABLE
-        )
+        chosen = resolve_versions(["cardano-db-sync 13.6.0.5 preprod", "13.7.1.0-hasql"], AVAILABLE)
         assert chosen == [
             "cardano-db-sync 13.6.0.5 preprod",
             "cardano-db-sync 13.7.1.0-hasql preprod",

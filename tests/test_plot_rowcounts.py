@@ -1,7 +1,7 @@
 """Tests for scripts/db-sync-plot.py::plot_rowcounts.
 
 Specifically locks down that the version label is always visible in the
-rendered plot — both in the chart title and on every trace's legend label.
+rendered plot - both in the chart title and on every trace's legend label.
 
 Background: plot_rowcounts originally only added the version to legend
 entries when comparing multiple versions; for a single-version plot the
@@ -25,9 +25,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 
 def _load_plot_module():
     """Import scripts/db-sync-plot.py. Hyphen → importlib."""
-    spec = importlib.util.spec_from_file_location(
-        "db_sync_plot_module", SCRIPTS_DIR / "db-sync-plot.py"
-    )
+    spec = importlib.util.spec_from_file_location("db_sync_plot_module", SCRIPTS_DIR / "db-sync-plot.py")
     module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     spec.loader.exec_module(module)  # type: ignore[union-attr]
     return module
@@ -43,13 +41,18 @@ def _make_df(rows: list[tuple[str, str, int, int]]) -> pd.DataFrame:
     a unique string per row so the time-axis sort is stable, but the tests
     use slot_no as the x-axis to keep them deterministic.
     """
-    return pd.DataFrame([
-        {
-            "version": v, "table_name": t, "slot_no": s, "row_count": rc,
-            "ts": f"2026-05-27T00:00:{i:02d}",
-        }
-        for i, (v, t, s, rc) in enumerate(rows)
-    ])
+    return pd.DataFrame(
+        [
+            {
+                "version": v,
+                "table_name": t,
+                "slot_no": s,
+                "row_count": rc,
+                "ts": f"2026-05-27T00:00:{i:02d}",
+            }
+            for i, (v, t, s, rc) in enumerate(rows)
+        ]
+    )
 
 
 @pytest.fixture
@@ -72,33 +75,43 @@ def capture_figure(monkeypatch: pytest.MonkeyPatch) -> dict:
 
 class TestPlotRowcountsTitle:
     def test_single_version_title_includes_short_token(
-        self, tmp_path: Path, capture_figure: dict,
+        self,
+        tmp_path: Path,
+        capture_figure: dict,
     ) -> None:
-        df = _make_df([
-            ("cardano-db-sync 13.7.1.0 preprod", "block", 100, 50),
-            ("cardano-db-sync 13.7.1.0 preprod", "tx",    100, 200),
-        ])
-        db_sync_plot.plot_rowcounts(
-            df, ["cardano-db-sync 13.7.1.0 preprod"],
-            str(tmp_path), "preprod", "slot",
+        df = _make_df(
+            [
+                ("cardano-db-sync 13.7.1.0 preprod", "block", 100, 50),
+                ("cardano-db-sync 13.7.1.0 preprod", "tx", 100, 200),
+            ]
         )
-        title_text = capture_figure["fig"].layout.title.text
-        assert "13.7.1.0" in title_text, (
-            f"Single-version title must name the version; got: {title_text!r}"
-        )
-
-    def test_two_versions_title_lists_both(
-        self, tmp_path: Path, capture_figure: dict,
-    ) -> None:
-        df = _make_df([
-            ("cardano-db-sync 13.6.0.5 preprod", "block", 100, 50),
-            ("cardano-db-sync 13.7.1.0 preprod", "block", 100, 55),
-        ])
         db_sync_plot.plot_rowcounts(
             df,
-            ["cardano-db-sync 13.6.0.5 preprod",
-             "cardano-db-sync 13.7.1.0 preprod"],
-            str(tmp_path), "preprod", "slot",
+            ["cardano-db-sync 13.7.1.0 preprod"],
+            str(tmp_path),
+            "preprod",
+            "slot",
+        )
+        title_text = capture_figure["fig"].layout.title.text
+        assert "13.7.1.0" in title_text, f"Single-version title must name the version; got: {title_text!r}"
+
+    def test_two_versions_title_lists_both(
+        self,
+        tmp_path: Path,
+        capture_figure: dict,
+    ) -> None:
+        df = _make_df(
+            [
+                ("cardano-db-sync 13.6.0.5 preprod", "block", 100, 50),
+                ("cardano-db-sync 13.7.1.0 preprod", "block", 100, 55),
+            ]
+        )
+        db_sync_plot.plot_rowcounts(
+            df,
+            ["cardano-db-sync 13.6.0.5 preprod", "cardano-db-sync 13.7.1.0 preprod"],
+            str(tmp_path),
+            "preprod",
+            "slot",
         )
         title_text = capture_figure["fig"].layout.title.text
         assert "13.6.0.5" in title_text and "13.7.1.0" in title_text, (
@@ -111,66 +124,113 @@ class TestPlotRowcountsTitle:
 
 class TestPlotRowcountsLegend:
     def test_single_version_trace_names_include_version(
-        self, tmp_path: Path, capture_figure: dict,
+        self,
+        tmp_path: Path,
+        capture_figure: dict,
     ) -> None:
         """Every trace's legend label must contain the version short token
         even when only one version is plotted. This is the specific gap that
-        prompted the fix — previously single-version legends showed just the
+        prompted the fix - previously single-version legends showed just the
         table name ('block', 'tx') with no version information."""
-        df = _make_df([
-            ("cardano-db-sync 13.7.1.0 preprod", "block", 100, 50),
-            ("cardano-db-sync 13.7.1.0 preprod", "tx",    100, 200),
-            ("cardano-db-sync 13.7.1.0 preprod", "tx_out", 100, 5000),
-        ])
+        df = _make_df(
+            [
+                ("cardano-db-sync 13.7.1.0 preprod", "block", 100, 50),
+                ("cardano-db-sync 13.7.1.0 preprod", "tx", 100, 200),
+                ("cardano-db-sync 13.7.1.0 preprod", "tx_out", 100, 5000),
+            ]
+        )
         db_sync_plot.plot_rowcounts(
-            df, ["cardano-db-sync 13.7.1.0 preprod"],
-            str(tmp_path), "preprod", "slot",
+            df,
+            ["cardano-db-sync 13.7.1.0 preprod"],
+            str(tmp_path),
+            "preprod",
+            "slot",
         )
         names = [t.name for t in capture_figure["fig"].data]
         assert names, "plot_rowcounts produced no traces for a non-empty DF"
         for n in names:
-            assert "13.7.1.0" in n, (
-                f"Single-version trace name must include the version; got: {n!r}"
-            )
-        # The table name should still be there too — version info shouldn't
+            assert "13.7.1.0" in n, f"Single-version trace name must include the version; got: {n!r}"
+        # The table name should still be there too - version info shouldn't
         # come at the cost of identifying which table the trace represents.
         assert any("block" in n for n in names)
         assert any("tx" in n for n in names)
         assert any("tx_out" in n for n in names)
 
     def test_two_versions_each_trace_carries_its_own_version(
-        self, tmp_path: Path, capture_figure: dict,
+        self,
+        tmp_path: Path,
+        capture_figure: dict,
     ) -> None:
-        df = _make_df([
-            ("cardano-db-sync 13.6.0.5 preprod", "block", 100, 50),
-            ("cardano-db-sync 13.7.1.0 preprod", "block", 100, 55),
-        ])
+        df = _make_df(
+            [
+                ("cardano-db-sync 13.6.0.5 preprod", "block", 100, 50),
+                ("cardano-db-sync 13.7.1.0 preprod", "block", 100, 55),
+            ]
+        )
         db_sync_plot.plot_rowcounts(
             df,
-            ["cardano-db-sync 13.6.0.5 preprod",
-             "cardano-db-sync 13.7.1.0 preprod"],
-            str(tmp_path), "preprod", "slot",
+            ["cardano-db-sync 13.6.0.5 preprod", "cardano-db-sync 13.7.1.0 preprod"],
+            str(tmp_path),
+            "preprod",
+            "slot",
         )
         names = [t.name for t in capture_figure["fig"].data]
-        # One trace per (version, table) -- here 2 versions x 1 table = 2.
-        assert len(names) == 2
-        # Exactly one trace per version (each carries the right short token).
+        # Each (version, table) appears once in the overview and once in its
+        # detail panel: 2 versions x 1 table x 2 sections = 4 traces.
+        assert len(names) == 4
         with_13_6 = [n for n in names if "13.6.0.5" in n]
         with_13_7 = [n for n in names if "13.7.1.0" in n]
-        assert len(with_13_6) == 1
-        assert len(with_13_7) == 1
+        assert len(with_13_6) == 2
+        assert len(with_13_7) == 2
+
+
+class TestPlotRowcountsStructure:
+    """Overview-then-detail layout (mirrors the RTS plot)."""
+
+    V = "cardano-db-sync 13.7.1.0 preprod"
+
+    def test_overview_then_per_table_detail(self, tmp_path: Path, capture_figure: dict) -> None:
+        df = _make_df(
+            [
+                (self.V, "tx_out", 100, 5000),
+                (self.V, "block", 100, 50),
+                (self.V, "tx", 100, 200),
+            ]
+        )
+        db_sync_plot.plot_rowcounts(df, [self.V], str(tmp_path), "preprod", "slot")
+        titles = [a.text for a in capture_figure["fig"].layout.annotations]
+        # Overview first, then one detail panel per table (sorted).
+        assert titles[0] == "Overview - all tables (log y)"
+        assert titles[1:] == ["block", "tx", "tx_out"]
+
+    def test_overview_is_log_and_detail_labelled_rows(self, tmp_path: Path, capture_figure: dict) -> None:
+        df = _make_df(
+            [
+                (self.V, "block", 100, 50),
+                (self.V, "tx", 100, 200),
+            ]
+        )
+        db_sync_plot.plot_rowcounts(df, [self.V], str(tmp_path), "preprod", "slot")
+        layout = capture_figure["fig"].layout
+        assert layout["yaxis"].type == "log"  # overview
+        assert layout["yaxis2"].title.text == "rows"  # first detail panel
 
 
 class TestPlotRowcountsLegendTitle:
     def test_legend_title_is_table_slash_version(
-        self, tmp_path: Path, capture_figure: dict,
+        self,
+        tmp_path: Path,
+        capture_figure: dict,
     ) -> None:
         """Legend title used to switch between 'Table' and 'Table / Version'
         depending on version count. Now that the version is always on each
         trace, 'Table / Version' applies in both modes."""
         df = _make_df([("cardano-db-sync 13.7.1.0 preprod", "block", 100, 50)])
         db_sync_plot.plot_rowcounts(
-            df, ["cardano-db-sync 13.7.1.0 preprod"],
-            str(tmp_path), "preprod", "slot",
+            df,
+            ["cardano-db-sync 13.7.1.0 preprod"],
+            str(tmp_path),
+            "preprod",
+            "slot",
         )
         assert capture_figure["fig"].layout.legend.title.text == "Table / Version"

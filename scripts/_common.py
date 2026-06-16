@@ -1,8 +1,8 @@
 """Shared helpers for db-sync-monitoring scripts.
 
-Imported by both monitor scripts (db-sync-monitor, node-monitor) and both plot
+Imported by both monitor scripts (db-sync-resource-monitor, node-resource-monitor) and both plot
 scripts (db-sync-plot, node-plot). Keep it focused on pure, side-effect-light
-helpers — no domain-specific data fetching (those belong in script-specific
+helpers - no domain-specific data fetching (those belong in script-specific
 modules like `_db_sync_queries`).
 
 Naming convention for users:
@@ -31,6 +31,7 @@ from psutil import Process
 
 # --- stderr-aware logging --------------------------------------------------
 
+
 def warn(msg: str) -> None:
     """Emit a warning/error message on stderr (line-flushed).
 
@@ -42,6 +43,7 @@ def warn(msg: str) -> None:
 
 
 # --- formatters ------------------------------------------------------------
+
 
 def format_size(mib: float | None) -> str:
     """Format a mebibyte value as 'X.X MiB' or 'X.X GiB'.
@@ -62,7 +64,7 @@ def format_bytes(n: int | None) -> str:
     """Format a raw byte count as 'X.XX [TiB|GiB|MiB|KiB|B]'.
 
     Binary units (1024-based) with binary labels, so the suffix matches the
-    divisor exactly — no GiB-labelled-as-GB ambiguity.
+    divisor exactly - no GiB-labelled-as-GB ambiguity.
     """
     if n is None:
         return "N/A"
@@ -100,6 +102,7 @@ def format_duration_compact(seconds: float | None) -> str:
 
 # --- time helpers ----------------------------------------------------------
 
+
 def utc_timestamp(dt: datetime) -> float:
     """POSIX seconds.
 
@@ -107,7 +110,7 @@ def utc_timestamp(dt: datetime) -> float:
     zone). cardano-db-sync stores UTC values in those columns. Python's
     `.timestamp()` would interpret a naive datetime as LOCAL time, producing
     a constant offset equal to the host's UTC offset (we hit this exact bug
-    earlier — `TipLag 2h` that was just the user's timezone). We pin tz=UTC
+    earlier - `TipLag 2h` that was just the user's timezone). We pin tz=UTC
     on naive datetimes before converting; aware datetimes pass through.
     """
     if dt.tzinfo is None:
@@ -118,13 +121,17 @@ def utc_timestamp(dt: datetime) -> float:
 # --- Cardano era mapping ---------------------------------------------------
 
 ERA_BY_PROTOCOL_MAJOR: dict[int, str] = {
-    0: "Byron", 1: "Byron",
+    0: "Byron",
+    1: "Byron",
     2: "Shelley",
     3: "Allegra",
     4: "Mary",
-    5: "Alonzo", 6: "Alonzo",
-    7: "Babbage", 8: "Babbage",
-    9: "Conway", 10: "Conway",
+    5: "Alonzo",
+    6: "Alonzo",
+    7: "Babbage",
+    8: "Babbage",
+    9: "Conway",
+    10: "Conway",
 }
 
 
@@ -158,7 +165,7 @@ def era_sort_key(era_name: str) -> tuple[int, int | str]:
 
 
 def step(i: int, n: int, msg: str) -> None:
-    """Stage-by-stage progress line — useful for long-running reports so a
+    """Stage-by-stage progress line - useful for long-running reports so a
     hang is locatable."""
     print(f"[{i}/{n}] {msg}…", flush=True)
 
@@ -171,12 +178,12 @@ def compute_epoch_durations(df: pd.DataFrame) -> pd.DataFrame:
         - ts_min   first sample seen in that epoch
         - ts_max   last sample seen in that epoch
         - era      era label of the first sample (constant within an epoch on
-                   Cardano — hard forks happen at epoch boundaries)
+                   Cardano - hard forks happen at epoch boundaries)
         - duration_sec   max(ts) minus min(ts) in seconds
 
     Used by the node-plot ingest mode to produce per-epoch and per-era charts.
     Note that for the very first / last epochs of a sync, the duration is
-    *partial* — only as long as the monitor was observing. Full-epoch durations
+    *partial* - only as long as the monitor was observing. Full-epoch durations
     only become available for epochs that started and ended while the monitor
     was running.
     """
@@ -192,6 +199,7 @@ def compute_epoch_durations(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # --- psutil sampling -------------------------------------------------------
+
 
 def find_processes(predicate: Callable[[Process], bool]) -> list[Process]:
     """All running Processes for which predicate(p) is True.
@@ -262,6 +270,30 @@ def get_cpu_details(process: Process) -> dict[str, Any] | None:
 
 # --- SQLite helpers --------------------------------------------------------
 
+# Writer connections to a per-env SQLite DB need a generous busy timeout.
+# Several collectors write to the SAME file (node-resource-monitor + node-rts-monitor +
+# node-db-size-monitor for `node`; db-sync-resource-monitor + ledger-size for `db-sync`),
+# and WAL serializes writers - only one connection may write at a time. Python's
+# sqlite3 default busy timeout is 5s, so a brief two-writer collision, or a
+# maintenance pass (rename-version, backup-stats) holding the write lock on a
+# multi-hundred-MB DB, raises "database is locked". The collectors don't catch
+# it, so a single lost race kills a run meant to last for days. 30s comfortably
+# outlasts normal contention; a stall longer than that is left for the caller to
+# handle (warn + skip the sample) rather than crash.
+WRITE_TIMEOUT_SEC = 30.0
+
+
+def connect_writer(db_file: str, timeout: float = WRITE_TIMEOUT_SEC) -> sqlite3.Connection:
+    """sqlite3 connection for code that INSERTs/CREATEs on a shared per-env DB.
+
+    The `timeout` arg installs SQLite's busy handler, so a writer blocked behind
+    another writer waits up to `timeout` seconds for the lock instead of failing
+    immediately. Readers (plot/report/stats) can keep using plain
+    sqlite3.connect - under WAL, reads never block on a writer.
+    """
+    return sqlite3.connect(db_file, timeout=timeout)
+
+
 def has_table(sqlite_file: str, table: str) -> bool:
     with sqlite3.connect(sqlite_file) as conn:
         cur = conn.execute(
@@ -286,15 +318,15 @@ def init_sqlite_schema(db_file: str, version_table: str) -> None:
       - <version_table> (timestamp, version)
 
     Enables SQLite WAL mode so the plot/report scripts can read concurrently
-    while the monitor writes — under the default rollback journal, long reads
+    while the monitor writes - under the default rollback journal, long reads
     can block writes (and vice versa) on a busy DB.
 
     Migrates older DBs that pre-date the `ts` column on memory_metrics/cpu_metrics.
 
-    Callers that need additional tables (e.g. db-sync-monitor's `ingest_metrics`
+    Callers that need additional tables (e.g. db-sync-resource-monitor's `ingest_metrics`
     and `table_rowcounts`) should create them after calling this.
     """
-    with sqlite3.connect(db_file) as conn:
+    with connect_writer(db_file) as conn:
         c = conn.cursor()
         c.execute("PRAGMA journal_mode=WAL;")
         c.execute(
@@ -309,9 +341,7 @@ def init_sqlite_schema(db_file: str, version_table: str) -> None:
                 iowait REAL, ctx_switches INTEGER, interrupts INTEGER,
                 version TEXT)"""
         )
-        c.execute(
-            f"CREATE TABLE IF NOT EXISTS {version_table} (timestamp TEXT, version TEXT)"
-        )
+        c.execute(f"CREATE TABLE IF NOT EXISTS {version_table} (timestamp TEXT, version TEXT)")
         for tbl in ("memory_metrics", "cpu_metrics"):
             cols = {row[1] for row in c.execute(f"PRAGMA table_info({tbl})")}
             if "ts" not in cols:
@@ -330,8 +360,7 @@ def report_existing_history(db_file: str, version_table: str, run_label: str) ->
     try:
         with sqlite3.connect(db_file) as conn:
             row = conn.execute(
-                f"SELECT COUNT(*), MIN(timestamp), MAX(timestamp) "
-                f"FROM {version_table} WHERE version = ?",
+                f"SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM {version_table} WHERE version = ?",
                 (run_label,),
             ).fetchone()
     except Exception as e:
@@ -350,6 +379,7 @@ def report_existing_history(db_file: str, version_table: str, run_label: str) ->
 
 # --- plot helpers ----------------------------------------------------------
 
+
 def short(v: str) -> str:
     """Extract a short token from a version label.
 
@@ -363,6 +393,65 @@ def short(v: str) -> str:
     return parts[1] if len(parts) >= 2 else v.replace(" ", "_")
 
 
+# Single source of truth for every table that carries a `version` column, by
+# role. Consumed by rename-version.py (which must rewrite all of them) and by
+# the plot pickers (which enumerate versions across all of them). Tables are
+# CREATEd across several files (_common.py, node-resource-monitor.py, db-sync-resource-monitor.py,
+# _disk_size.py, node-rts-monitor.py); keeping the list here - and enforcing it
+# with tests/test_version_tables_registry.py - prevents the drift that twice
+# left a new collector's table (disk_metrics, rts_metrics) unregistered, with
+# silently-empty plots and stranded data as the result.
+VERSION_KEYED_TABLES: dict[str, tuple[str, ...]] = {
+    "node": (
+        "memory_metrics",
+        "cpu_metrics",
+        "node_version",
+        "node_ingest_metrics",
+        "disk_metrics",
+        "rts_metrics",
+    ),
+    "db-sync": (
+        "memory_metrics",
+        "cpu_metrics",
+        "db_sync_version",
+        "ingest_metrics",
+        "table_rowcounts",
+    ),
+}
+
+
+def attach_slot_by_ts(df: DataFrame, sqlite_file: str, versions: list[str]) -> DataFrame:
+    """Add a `slot_no` column to a timestamped df that has none of its own (e.g.
+    `disk_metrics`), by nearest-timestamp lookup against the concurrently-written
+    `memory_metrics` (which carries both `ts` and `slot_no`), per version.
+
+    The disk collector runs alongside the resource monitor on the same DB but
+    doesn't record a slot; its samples fall between resource samples in
+    wall-clock time, so `merge_asof(..., direction="nearest")` assigns each disk
+    sample the closest resource slot. A version with no resource rows gets
+    `slot_no = NaN`, so the caller can fall back to the time axis.
+    """
+    if df.empty or "ts" not in df.columns or not has_table(sqlite_file, "memory_metrics"):
+        return df.assign(slot_no=pd.NA)  # type: ignore[arg-type]
+    placeholders = ",".join("?" for _ in versions)
+    with sqlite3.connect(sqlite_file) as conn:
+        ref = pd.read_sql_query(
+            f"SELECT version, ts, slot_no FROM memory_metrics "
+            f"WHERE version IN ({placeholders}) AND ts IS NOT NULL AND slot_no IS NOT NULL",
+            conn,
+            params=versions,  # type: ignore[arg-type]
+        )
+    if ref.empty:
+        return df.assign(slot_no=pd.NA)  # type: ignore[arg-type]
+    ref["ts"] = pd.to_datetime(ref["ts"], errors="coerce")
+    left = df.copy()
+    left["ts"] = pd.to_datetime(left["ts"], errors="coerce")
+    # merge_asof needs both inputs globally sorted on the `on` key.
+    left = left.sort_values("ts")
+    ref = ref.dropna(subset=["ts"]).sort_values("ts")
+    return pd.merge_asof(left, ref[["ts", "version", "slot_no"]], on="ts", by="version", direction="nearest")
+
+
 def load_versions_from_sqlite(sqlite_file: str, version_table: str) -> list[str]:
     """Distinct versions present in `version_table`, latest first."""
     with sqlite3.connect(sqlite_file) as conn:
@@ -371,6 +460,51 @@ def load_versions_from_sqlite(sqlite_file: str, version_table: str) -> list[str]
             conn,
         )
     return [str(v) for v in df["version"].tolist()]
+
+
+def load_all_versions(sqlite_file: str, tables: list[str]) -> list[str]:
+    """Union of distinct `version` labels across every existing table in
+    `tables`, most-recent-first.
+
+    Unlike `load_versions_from_sqlite` (which reads a single version table),
+    this surfaces labels that only the optional collectors wrote - the disk
+    (`disk_metrics`) and RTS (`rts_metrics`) monitors never write the
+    `node_version` table, so a run collected *only* by one of them - or one
+    saved under a mistyped `--node-ver` - would otherwise be invisible and
+    unselectable in the plot picker. Each table is ordered by its own time
+    column (`ts` on metric tables, `timestamp` on the *_version tables);
+    missing tables are skipped.
+    """
+    last_seen: dict[str, str] = {}
+    with sqlite3.connect(sqlite_file) as conn:
+        for table in tables:
+            if not has_table(sqlite_file, table):
+                continue
+            time_col = "ts" if has_column(sqlite_file, table, "ts") else "timestamp"
+            rows = conn.execute(f"SELECT version, MAX({time_col}) FROM {table} GROUP BY version").fetchall()
+            for version, last_ts in rows:
+                if version is None:
+                    continue
+                key = str(version)
+                # Keep the most recent sighting of each label across all tables.
+                if key not in last_seen or (last_ts is not None and str(last_ts) > last_seen[key]):
+                    last_seen[key] = str(last_ts) if last_ts is not None else ""
+    return [v for v, _ in sorted(last_seen.items(), key=lambda kv: kv[1], reverse=True)]
+
+
+def subplot_dims(rows: int, panel_px: int = 300, gap_px: int = 40, margin_px: int = 160) -> tuple[int, float]:
+    """Figure height (px) and `vertical_spacing` (fraction) for an `rows`-row
+    stacked subplot, sizing each panel and the inter-panel gap in fixed pixels.
+
+    Plotly's `vertical_spacing` is a fraction of the figure height applied
+    between every pair of rows, so a fixed fraction makes the gaps balloon to
+    most of the height once there are many rows (tiny panels, huge whitespace).
+    Deriving the fraction from a fixed pixel gap keeps every panel its intended
+    height regardless of row count, and stays under Plotly's 1/(rows-1) cap.
+    Returns ``(height_px, vertical_spacing)``; spacing is 0.0 for a single row.
+    """
+    total = rows * panel_px + max(0, rows - 1) * gap_px + margin_px
+    return total, (gap_px / total if rows > 1 else 0.0)
 
 
 def resolve_versions(requested: list[str], available: list[str]) -> list[str]:
@@ -396,11 +530,14 @@ def resolve_versions(requested: list[str], available: list[str]) -> list[str]:
     return resolved
 
 
-def insert_gap_breaks(
-    df: DataFrame, group_keys: list[str], gap_sec: float = 50.0
-) -> DataFrame:
+# Fallback gap threshold (seconds) when a series' cadence can't be measured -
+# ~5x the standard 10-second sample interval.
+_DEFAULT_GAP_SEC = 50.0
+
+
+def insert_gap_breaks(df: DataFrame, group_keys: list[str], gap_sec: float | None = None) -> DataFrame:
     """Insert NaN marker rows where consecutive samples within each group have
-    a wall-clock `ts` gap larger than `gap_sec`.
+    a wall-clock `ts` gap larger than the gap threshold.
 
     The monitor appends samples to the same series across restarts (correct
     industry-standard model). Without this, plotly connects the last sample
@@ -409,7 +546,15 @@ def insert_gap_breaks(
     Inserting a NaN row at the gap midpoint forces plotly to break the line
     there (Scatter has connectgaps=False by default).
 
-    Default `gap_sec=50.0` ~ 5x the standard 10-second sample interval.
+    The threshold adapts to each series' own cadence: when `gap_sec` is None
+    (the default), it is computed per group as 5x the median inter-sample
+    interval, falling back to ``_DEFAULT_GAP_SEC`` when that can't be measured
+    (fewer than two samples, or a zero/NaN median). This matters because
+    collectors sample at different rates - node-resource-monitor.py every ~10s, but
+    node-db-size-monitor.py every 60s; a fixed 50s threshold would treat
+    *every* normal 60s disk sample as a gap and break the line at every point,
+    rendering an empty plot. Pass an explicit `gap_sec` to override.
+
     Large enough to ignore the occasional slow sample; small enough to catch
     real gaps (restarts, ssh disconnects, etc.).
     """
@@ -422,7 +567,12 @@ def insert_gap_breaks(
             pieces.append(sub)
             continue
         diffs = sub["ts"].diff().dt.total_seconds()
-        gap_positions = sub.index[diffs > gap_sec].tolist()
+        if gap_sec is None:
+            median_diff = diffs.median()
+            threshold = 5 * median_diff if median_diff and median_diff > 0 else _DEFAULT_GAP_SEC
+        else:
+            threshold = gap_sec
+        gap_positions = sub.index[diffs > threshold].tolist()
         if not gap_positions:
             pieces.append(sub)
             continue
@@ -444,8 +594,6 @@ def insert_gap_breaks(
                 message="The behavior of DataFrame concatenation",
             )
             pieces.append(
-                pd.concat([sub, pd.DataFrame(breaks_rows)], ignore_index=True)
-                .sort_values("ts")
-                .reset_index(drop=True)
+                pd.concat([sub, pd.DataFrame(breaks_rows)], ignore_index=True).sort_values("ts").reset_index(drop=True)
             )
     return pd.concat(pieces, ignore_index=True)

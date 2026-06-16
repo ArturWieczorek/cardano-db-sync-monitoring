@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Repo-local pre-commit gate.
+#
+# Why this file exists: the machine sets a GLOBAL `core.hooksPath` (see the
+# dotfiles bootstrap), which makes git ignore every repo's `.git/hooks/` and
+# makes `pre-commit install` refuse ("Cowardly refusing to install hooks with
+# `core.hooksPath` set"). The global dispatcher instead chains to
+# `$REPO_ROOT/hooks/pre-commit` if it exists - this file. So this is how the
+# pre-commit framework gate (ruff, ruff-format, mypy from .pre-commit-config.yaml)
+# actually runs on commit in that setup.
+#
+# Fail-open if pre-commit isn't available, so a contributor without it (or a
+# machine without the global dispatcher) is never blocked. Bypass once with:
+#   git commit --no-verify
+set -uo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+pc="$root/.venv/bin/pre-commit"
+[ -x "$pc" ] || pc="$(command -v pre-commit || true)"
+if [ -z "$pc" ]; then
+    echo "[hooks/pre-commit] pre-commit not found (.venv or PATH); skipping gate." >&2
+    exit 0
+fi
+
+# Run the framework against the staged files (the default for `pre-commit run`).
+exec "$pc" run

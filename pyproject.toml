@@ -14,9 +14,17 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8,<9",
-    "ruff>=0.11,<1",
-    "mypy>=1.10,<2",
+    # Floors track the versions pinned in .pre-commit-config.yaml so a fresh
+    # `uv pip compile` can't resolve back to an older ruff/mypy than the gate runs.
+    "ruff>=0.15,<1",
+    "mypy>=1.20,<2",
     "pre-commit>=4,<5",
+    # Type stubs so the venv's `mypy` checks pandas/psutil exactly like the
+    # pre-commit mypy hook does (which lists these as additional_dependencies).
+    # Without them the venv mypy treats pandas as untyped and silently passes
+    # code the gate would reject.
+    "pandas-stubs>=2.2,<3",
+    "types-psutil>=6,<8",
 ]
 # Static PNG export for the *-stats-report.py tools (Plotly's image backend).
 # Only needed for Markdown/PNG report output; interactive HTML needs none of it.

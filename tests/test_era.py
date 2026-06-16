@@ -64,7 +64,5 @@ class TestEraSortKey:
 
     def test_unknowns_relative_order(self):
         # Unknowns sort alphabetically among themselves.
-        sorted_eras = sorted(
-            ["Unknown (proto 12)", "Unknown (proto 11)", "Conway"], key=era_sort_key
-        )
+        sorted_eras = sorted(["Unknown (proto 12)", "Unknown (proto 11)", "Conway"], key=era_sort_key)
         assert sorted_eras == ["Conway", "Unknown (proto 11)", "Unknown (proto 12)"]

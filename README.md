@@ -267,8 +267,10 @@ pip install .[dev]     # runtime + dev tools
 `requirements.lock` pins every transitive dep including dev tools. Regenerate after dependency changes:
 
 ```bash
-uv pip compile pyproject.toml --extra dev -o requirements.lock
+uv pip compile --python-version 3.10 pyproject.toml --extra dev -o requirements.lock
 ```
+
+`--python-version 3.10` is required: it resolves for the project's minimum Python (also a CI matrix target) so the lock can't pin a package that only supports a newer Python (e.g. `numpy>=2.3` needs >=3.11, which breaks the 3.10 job). Omitting it resolves against whatever interpreter you run `uv` with.
 
 ## For contributors
 

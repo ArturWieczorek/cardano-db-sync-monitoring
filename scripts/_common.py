@@ -566,7 +566,7 @@ def insert_gap_breaks(df: DataFrame, group_keys: list[str], gap_sec: float | Non
         if len(sub) < 2 or sub["ts"].isna().all():
             pieces.append(sub)
             continue
-        diffs = sub["ts"].diff().dt.total_seconds()
+        diffs = sub["ts"].diff().dt.total_seconds()  # type: ignore[arg-type]
         if gap_sec is None:
             median_diff = diffs.median()
             threshold = 5 * median_diff if median_diff and median_diff > 0 else _DEFAULT_GAP_SEC

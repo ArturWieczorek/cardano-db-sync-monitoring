@@ -24,6 +24,7 @@ def _load(modname: str, filename: str):
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
     return mod
 
+
 node_mod = _load("node_db_size_monitor", "node-db-size-monitor.py")
 dbsync_mod = _load("db_sync_ledger_size_monitor", "db-sync-ledger-size-monitor.py")
 NodeDbSizeMonitor = node_mod.NodeDbSizeMonitor
@@ -91,8 +92,13 @@ class TestParsePathFlag:
 
 def _node(tmp_path, **kw):
     defaults = dict(
-        env="mainnet", version="LSM-11.0.1", explicit_path=None, lsm_subdir="lsm",
-        interval=1, du_timeout=30, emit_json=False,
+        env="mainnet",
+        version="LSM-11.0.1",
+        explicit_path=None,
+        lsm_subdir="lsm",
+        interval=1,
+        du_timeout=30,
+        emit_json=False,
         sqlite_db=str(tmp_path / "node.db"),
     )
     defaults.update(kw)
@@ -101,8 +107,13 @@ def _node(tmp_path, **kw):
 
 def _dbsync(tmp_path, **kw):
     defaults = dict(
-        env="mainnet", version="LSM-13.7.1.0", explicit_path=None, lsm_subdir="lsm",
-        interval=1, du_timeout=30, emit_json=False,
+        env="mainnet",
+        version="LSM-13.7.1.0",
+        explicit_path=None,
+        lsm_subdir="lsm",
+        interval=1,
+        du_timeout=30,
+        emit_json=False,
         sqlite_db=str(tmp_path / "dbsync.db"),
     )
     defaults.update(kw)
@@ -118,10 +129,26 @@ class TestRunLabel:
 
     def test_default_db_paths(self, tmp_path):
         # Default (no --sqlite-db) points at the role's data dir.
-        n = NodeDbSizeMonitor(env="preprod", version="v", explicit_path="/x", lsm_subdir="lsm",
-                              interval=1, du_timeout=1, emit_json=False, sqlite_db=None)
-        d = DbSyncLedgerSizeMonitor(env="preprod", version="v", explicit_path="/x", lsm_subdir="lsm",
-                                    interval=1, du_timeout=1, emit_json=False, sqlite_db=None)
+        n = NodeDbSizeMonitor(
+            env="preprod",
+            version="v",
+            explicit_path="/x",
+            lsm_subdir="lsm",
+            interval=1,
+            du_timeout=1,
+            emit_json=False,
+            sqlite_db=None,
+        )
+        d = DbSyncLedgerSizeMonitor(
+            env="preprod",
+            version="v",
+            explicit_path="/x",
+            lsm_subdir="lsm",
+            interval=1,
+            du_timeout=1,
+            emit_json=False,
+            sqlite_db=None,
+        )
         assert n.db_file.endswith("data/cardano-node/preprod.db")
         assert d.db_file.endswith("data/cardano-db-sync/preprod.db")
 
@@ -171,8 +198,7 @@ class TestSchemaAndSampling:
     def test_init_creates_disk_metrics_in_wal(self, tmp_path):
         m = _node(tmp_path, explicit_path="/x")
         with sqlite3.connect(m.db_file) as conn:
-            tables = {r[0] for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'")}
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
         assert "disk_metrics" in tables
         assert mode.lower() == "wal"
@@ -195,8 +221,7 @@ class TestSchemaAndSampling:
         assert lsm >= 1500
         # Row landed under the right version label.
         with sqlite3.connect(m.db_file) as conn:
-            row = conn.execute(
-                "SELECT total_bytes, lsm_bytes, version FROM disk_metrics").fetchone()
+            row = conn.execute("SELECT total_bytes, lsm_bytes, version FROM disk_metrics").fetchone()
         assert row[0] == total and row[1] == lsm
         assert row[2] == "cardano-node LSM-11.0.1 mainnet"
 

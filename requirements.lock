@@ -23,12 +23,16 @@ narwhals==2.21.2
 nodeenv==1.10.0
     # via pre-commit
 numpy==2.4.6
-    # via pandas
+    # via
+    #   pandas
+    #   pandas-stubs
 packaging==26.2
     # via
     #   plotly
     #   pytest
 pandas==2.3.3
+    # via db-sync-monitoring (pyproject.toml)
+pandas-stubs==2.3.3.260113
     # via db-sync-monitoring (pyproject.toml)
 pathspec==1.1.1
     # via mypy
@@ -62,6 +66,10 @@ ruff==0.15.14
     # via db-sync-monitoring (pyproject.toml)
 six==1.17.0
     # via python-dateutil
+types-psutil==7.2.2.20260518
+    # via db-sync-monitoring (pyproject.toml)
+types-pytz==2026.2.0.20260518
+    # via pandas-stubs
 typing-extensions==4.15.0
     # via mypy
 tzdata==2026.2

@@ -6,8 +6,8 @@ plotters with gap-aware rendering, postgres-side comparison reports, and
 supporting utilities (SQLite backup, version rename) - with a tested core and CI
 across Python 3.10-3.12.
 
-**Latest release:** [`v1.2.0`](https://github.com/ArturWieczorek/cardano-db-sync-monitoring/releases/tag/v1.2.0)
-- 2026-06-04 - see [`CHANGELOG.md`](CHANGELOG.md) for the full release notes.
+**Latest release:** [`v1.3.0`](https://github.com/ArturWieczorek/cardano-db-sync-monitoring/releases/tag/v1.3.0)
+- 2026-06-16 - see [`CHANGELOG.md`](CHANGELOG.md) for the full release notes.
 
 ---
 

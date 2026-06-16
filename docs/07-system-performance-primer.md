@@ -4,7 +4,7 @@ This is the one doc in the series that is **not about Cardano**. It is a from-sc
 *performance engineering*: what your CPU, RAM, and disks actually do when you run a program, what
 it means to be "I/O-bound" or "CPU-bound," what swap and the page cache are for, what `io_uring`
 and `LUKS` are, why two SSDs behave differently from one, what PSI is and how to measure things
-honestly, and which errors (OOM, segfault, EIO…) mean what.
+honestly, and which errors (OOM, segfault, EIO...) mean what.
 
 Everything up to the last section is generic - it applies to any heavy program (a database, a
 video encoder, a compiler, a game). **Only the final section** connects it back to `cardano-node`
@@ -137,7 +137,7 @@ If memory demand exceeds RAM **and** swap and nothing can be reclaimed, the kern
 memory from nothing. Rather than freeze forever, the **OOM (Out-Of-Memory) killer** picks a process
 and kills it to recover RAM. It scores processes (roughly "who'll free the most, who's least
 important" - the `oom_score`) and terminates the loser. You'll find the evidence in the kernel log
-(`dmesg` / journal): *"Out of memory: Killed process …"*. From the program's point of view it just
+(`dmesg` / journal): *"Out of memory: Killed process ..."*. From the program's point of view it just
 *vanishes* - no clean shutdown, no error it could catch. (More in §12.)
 
 ### Linux vs Windows memory reporting
@@ -535,7 +535,7 @@ Match the tool to the question:
 | Which **process** is doing the disk I/O | `iotop`, `pidstat -d 1` |
 | Per-process CPU / context-switch / memory rates over time | `pidstat 1`, `pidstat -w 1` |
 | **Stall / pressure** (the honest saturation signal) | `cat /proc/pressure/{cpu,memory,io}` |
-| Drive health, reallocated sectors, error counters | `smartctl -a /dev/…` |
+| Drive health, reallocated sectors, error counters | `smartctl -a /dev/...` |
 | Recorded multi-resource history / one-screen dashboard | `sar` (sysstat), `dstat` |
 | Deep CPU profiling (where cycles actually go) | `perf` |
 | Kernel events: OOM kills, I/O errors, resets | `dmesg`, the journal |
@@ -566,7 +566,7 @@ shouldn't have."
 
 | Failure | What it is | Typical cause | Where you see it |
 |:---|:---|:---|:---|
-| **OOM kill** | The kernel's OOM killer terminates a process to reclaim RAM when memory + swap are exhausted. The process gets *no chance to handle it* - it's killed outright. | Working set exceeds RAM+swap; a memory leak; too many memory-hungry processes at once. | `dmesg`/journal: *"Out of memory: Killed process …"*; the process just vanishes. |
+| **OOM kill** | The kernel's OOM killer terminates a process to reclaim RAM when memory + swap are exhausted. The process gets *no chance to handle it* - it's killed outright. | Working set exceeds RAM+swap; a memory leak; too many memory-hungry processes at once. | `dmesg`/journal: *"Out of memory: Killed process ..."*; the process just vanishes. |
 | **Segfault (SIGSEGV)** | The program accessed a memory address it isn't allowed to (a *programming* fault, not a resource shortage). | Null/dangling pointer, buffer overrun, bug in the program or a library. **Unrelated to how much RAM is free.** | `Segmentation fault (core dumped)`; a crash report / core dump. |
 | **Thrashing / swap-death** | The machine spends ~all its time swapping pages in and out instead of working; it appears frozen though "CPU is idle." | Memory pressure just under the OOM threshold - constant paging. | Sustained high `si`/`so` in `vmstat`; high memory PSI; UI unresponsive. |
 | **`EIO` (I/O error)** | A read/write failed at the **hardware/device** level. | Failing disk, bad sectors, cable/controller fault, device reset. | Kernel log I/O errors; `smartctl` shows reallocated/pending sectors. |
@@ -671,7 +671,7 @@ distinct signals).
 
 **Which tool answers which question:**
 
-| You want to know… | Reach for… |
+| You want to know... | Reach for... |
 |:---|:---|
 | Am I out of memory / how much headroom? | `free -h` (read *available*), memory PSI |
 | Am I swapping right now? | `vmstat 1` (`si`/`so`), memory PSI |
@@ -679,7 +679,7 @@ distinct signals).
 | Is a disk the bottleneck, and how hard? | `iostat -xz 1` (util, await), **I/O PSI** |
 | *Which* process is hitting the disk? | `iotop`, `pidstat -d 1` |
 | Is the *machine* under genuine pressure? | `cat /proc/pressure/{cpu,memory,io}` |
-| Is the drive itself healthy? | `smartctl -a /dev/…` |
+| Is the drive itself healthy? | `smartctl -a /dev/...` |
 | Did the kernel kill something / log I/O errors? | `dmesg`, the journal |
 
 For *how this project turns these ideas into sampled time-series and graphs*, see

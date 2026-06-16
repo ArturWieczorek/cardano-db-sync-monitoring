@@ -104,7 +104,7 @@ def build_build_section(db: str, env: str, label: str, role: str) -> ReportSecti
         for axis in AXES:
             # Building a figure (large mainnet tables especially) can take a
             # while, so announce each one - otherwise the run looks hung here.
-            print(f"[{env}] building {role} ({tag}): {caption} - {axis}-axis…", flush=True)
+            print(f"[{env}] building {role} ({tag}): {caption} - {axis}-axis...", flush=True)
             fig = build_fig(db, [label], env, kind, axis)
             if fig is None:
                 print(f"[{env}]   -> no data for this metric/axis, skipped", flush=True)
@@ -128,7 +128,7 @@ def build_comparison_section(db: str, env: str, labels: list[str], title: str, t
     """
     sec = ReportSection(title=title)
     for kind, caption, infix in HEADLINE:
-        print(f"[{env}] building {title}: {caption} - slot-axis…", flush=True)
+        print(f"[{env}] building {title}: {caption} - slot-axis...", flush=True)
         fig = build_fig(db, labels, env, kind, "slot")
         if fig is None:
             print(f"[{env}]   -> no data for this metric/axis, skipped", flush=True)
@@ -166,7 +166,7 @@ def build_env_report(db: str, env: str, args: argparse.Namespace) -> list[Report
         warn(f"{env}: neither --inmemory nor --lsm resolved against {db}; skipping.")
         return None
 
-    print(f"[{env}] loading data and building figures…", flush=True)
+    print(f"[{env}] loading data and building figures...", flush=True)
     sections: list[ReportSection] = []
     if inmem:
         sections.append(build_build_section(db, env, inmem, "InMemory"))
@@ -215,7 +215,7 @@ def write_env_report(env: str, sections: list[ReportSection], args: argparse.Nam
         print(f"[{env}] wrote {env_dir / 'report.md'} (+ {total} PNGs)", flush=True)
 
     if args.format in ("html", "both"):
-        print(f"[{env}] writing interactive HTML…", flush=True)
+        print(f"[{env}] writing interactive HTML...", flush=True)
         out = env_dir / "report.html"
         out.write_text(assemble_html(title, sections, subtitle=subtitle, max_points=args.html_max_points))
         print(f"[{env}] wrote {out} ({out.stat().st_size / 1024 / 1024:.1f} MiB)", flush=True)

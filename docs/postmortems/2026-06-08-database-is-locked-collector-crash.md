@@ -1,7 +1,7 @@
 # Post-mortem: collectors crashing on "database is locked"
 
 **Date:** 2026-06-08
-**Severity:** availability — long-running collectors died mid-sync (no data corrupted)
+**Severity:** availability - long-running collectors died mid-sync (no data corrupted)
 **Components:** `node-resource-monitor.py`, `node-rts-monitor.py`, `_disk_size.py`, `db-sync-resource-monitor.py`, `_common` (new `connect_writer`), `rename-version.py`
 
 ## Summary
@@ -14,7 +14,7 @@ unhandled `sqlite3.OperationalError: database is locked`. The resource collector
 fine for hours; each was killed by a single lost write-lock race, ending the
 collection for that run.
 
-No data on disk was damaged — WAL crashes are atomic, and everything written
+No data on disk was damaged - WAL crashes are atomic, and everything written
 before the crash was intact. The cost was the *future* samples we stopped
 collecting until the processes were restarted.
 
@@ -23,7 +23,7 @@ collecting until the processes were restarted.
 - Any env where two or more node collectors run together
   (`node-resource-monitor` + `node-rts-monitor` + `node-db-size-monitor`) was exposed; the
   same applies to db-sync (`db-sync-resource-monitor` + `db-sync-ledger-size-monitor`).
-- A crash is silent unless someone is watching the terminal — a multi-day sync
+- A crash is silent unless someone is watching the terminal - a multi-day sync
   could lose most of its run before anyone noticed the collector was gone.
 - The plots show the outage as a gap (correctly broken by `insert_gap_breaks`),
   but the data for that period is simply absent.
@@ -48,7 +48,7 @@ Traceback (most recent call last):
 sqlite3.OperationalError: database is locked
 ```
 
-Two different collectors, two different tables, same error, same file — the shape
+Two different collectors, two different tables, same error, same file - the shape
 pointed straight at write-lock contention on the shared `mainnet.db`.
 
 ## Root cause
@@ -57,7 +57,7 @@ Three facts combined:
 
 1. **One file, several writers.** `node-resource-monitor`, `node-rts-monitor`, and
    `node-db-size-monitor` all append to `data/cardano-node/<env>.db` (and the two
-   db-sync collectors share `data/cardano-db-sync/<env>.db`). This is by design —
+   db-sync collectors share `data/cardano-db-sync/<env>.db`). This is by design -
    keeping each run's series in one file is what makes the plots join up.
 
 2. **WAL doesn't make SQLite multi-writer.** WAL mode (which we enable for
@@ -66,7 +66,7 @@ Three facts combined:
 
 3. **The default busy timeout is only 5s, and the exception was uncaught.** Python's
    `sqlite3.connect` waits 5 seconds for the lock, then raises `database is locked`.
-   Normal inserts are sub-millisecond, so 5s is usually invisible — but it can be
+   Normal inserts are sub-millisecond, so 5s is usually invisible - but it can be
    exhausted by a checkpoint on a 120 MB DB, or by a maintenance pass
    (`rename-version.py`, `backup-stats.py`) holding the write lock. The collector
    loops did not catch `OperationalError`, so the first time a writer lost the race
@@ -80,7 +80,7 @@ transient, recoverable collision into a fatal crash.
 
 - **A generous, shared busy timeout.** New `_common.connect_writer(db_file)` opens
   a connection with `WRITE_TIMEOUT_SEC = 30` seconds. Every writer now goes through
-  it — the two crashed collectors, plus `_disk_size.py`, `db-sync-resource-monitor.py`,
+  it - the two crashed collectors, plus `_disk_size.py`, `db-sync-resource-monitor.py`,
   `_common.init_sqlite_schema`, and `rename-version.py`'s rewrite transaction (so a
   rename waits for a live monitor instead of racing it). Readers (plot/report/stats)
   keep plain `sqlite3.connect`; under WAL they never block on a writer.
@@ -93,7 +93,7 @@ transient, recoverable collision into a fatal crash.
   run loop with a write that raises `database is locked` and asserts the loop warns
   and exits cleanly instead of propagating.
 - **Docs corrected.** `README.md` and `docs/08` both asserted "one writer per env" /
-  "a single writer" as a justification — the exact assumption that broke. Both are
+  "a single writer" as a justification - the exact assumption that broke. Both are
   fixed, and `docs/05` gains a *Multiple writers and `busy_timeout`* section.
 
 ## Standing invariant for contributors
@@ -106,7 +106,7 @@ transient, recoverable collision into a fatal crash.
 ## Lessons
 
 - "We only ever have one writer" was true when the first collector shipped and
-  quietly became false as `node-rts-monitor` and `node-db-size-monitor` were added —
+  quietly became false as `node-rts-monitor` and `node-db-size-monitor` were added -
   the *same drift pattern* as the [2026-06-06 post-mortem](2026-06-06-empty-disk-and-invisible-rts.md),
   where new collectors outran an assumption baked into older code (and docs).
 - A library default tuned for the common case (5s busy timeout) is a latent

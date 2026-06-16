@@ -167,7 +167,7 @@ def era_sort_key(era_name: str) -> tuple[int, int | str]:
 def step(i: int, n: int, msg: str) -> None:
     """Stage-by-stage progress line - useful for long-running reports so a
     hang is locatable."""
-    print(f"[{i}/{n}] {msg}…", flush=True)
+    print(f"[{i}/{n}] {msg}...", flush=True)
 
 
 def compute_epoch_durations(df: pd.DataFrame) -> pd.DataFrame:

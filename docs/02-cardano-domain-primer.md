@@ -6,7 +6,7 @@ Just enough Cardano context to read the project's graphs intelligently. Skip if 
 
 Cardano's time is measured in **slots**. Each slot is 1 second long. A slot may or may not produce a block - block production is probabilistic, weighted by stake. On mainnet today, roughly 5% of slots produce a block (≈ one block every 20 seconds on average, with occasional gaps).
 
-Slots are grouped into **epochs**. From the Shelley era onward, one epoch = 432,000 slots = exactly 5 days. Epoch numbers (0, 1, 2, …) advance every 5 days. The current epoch on preprod is in the high 200s (preprod started in 2022).
+Slots are grouped into **epochs**. From the Shelley era onward, one epoch = 432,000 slots = exactly 5 days. Epoch numbers (0, 1, 2, ...) advance every 5 days. The current epoch on preprod is in the high 200s (preprod started in 2022).
 
 ### Byron-era epochs were shorter - and that matters during catch-up
 

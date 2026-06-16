@@ -41,7 +41,7 @@ sqlite3 -header -column data/cardano-node/mainnet.db "SELECT ..."
 **Every run is tagged with a version label** of the form
 `cardano-db-sync <ver> <env>` or `cardano-node <ver> <env>` - e.g.
 `cardano-db-sync 13.7.1.0-node-11.0.1 preprod`. You filter on the **full label**
-in `WHERE version = '…'`. (See [10 - Generating reports](10-generating-reports.md)
+in `WHERE version = '...'`. (See [10 - Generating reports](10-generating-reports.md)
 and the [glossary](06-glossary.md) for the label model; don't know which labels
 exist? See the first query below.)
 
@@ -79,7 +79,7 @@ FROM memory_metrics
 WHERE version = 'cardano-db-sync 13.7.1.0-node-11.0.1 preprod';
 ```
 > `julianday()` turns the ISO timestamps into days; `* 24` gives hours. Example:
-> `5677 samples … 8.09 hours`.
+> `5677 samples ... 8.09 hours`.
 
 ---
 
@@ -201,7 +201,7 @@ WHERE version = 'cardano-db-sync 13.7.1.0-node-11.0.1 preprod'
 GROUP BY table_name
 ORDER BY latest_rows DESC;
 ```
-> Example top rows: `ma_tx_out 21.8M, tx_out 20.2M, tx 5.8M, …`.
+> Example top rows: `ma_tx_out 21.8M, tx_out 20.2M, tx 5.8M, ...`.
 
 ---
 

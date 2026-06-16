@@ -205,7 +205,7 @@ Within a build, the metrics behave like this:
 > means those collectors weren't running for that build.
 
 While it runs, it prints progress so you can see it's working, e.g.
-`[mainnet] rendering PNG 7/17: …` and the final HTML size.
+`[mainnet] rendering PNG 7/17: ...` and the final HTML size.
 
 > The output folder is **wiped of its own old files** (`*.png`, `report.md`,
 > `report.html`) at the start of each run, so a re-run never leaves stale or
@@ -269,7 +269,7 @@ section.
 |:---|:---|
 | `error: argument --inmemory: expected one argument` | You wrote the flag with **no value** after it. Each of `--inmemory` / `--lsm` / `--compare-to` needs the build's **token** right after it, e.g. `--inmemory 11.0.1`. Find the tokens with `node-plot.py --env <env> --list` (the token is the middle part of each label). |
 | `error: unrecognized arguments: 10.1.4 mainnet` | You passed a full label with spaces, unquoted. Pass just the **token** (`--compare-to 10.1.4`), or quote the whole label. See [Naming](#naming-the-part-that-trips-people-up). |
-| `PNG export needs the 'kaleido' package…` | Install it: `pip install '.[report]'`. Or use `--format html`, which needs nothing extra. |
+| `PNG export needs the 'kaleido' package...` | Install it: `pip install '.[report]'`. Or use `--format html`, which needs nothing extra. |
 | The `report.html` is huge / slow to open | Use `--html-max-points 4000`, or `--format md` for small images. |
 | No Disk or RTS section appears | That build has no `disk_metrics` / `rts_metrics` rows (those optional collectors weren't run for it). The rest of the report is still correct. |
 | A section is missing or its plots are empty | That build/axis has no rows in the stats DB for that token. Check the token with `node-plot.py --env <env> --list`. If only one build exists, comparisons are skipped on purpose. |

@@ -2,7 +2,7 @@
 
 The "why is the SQL written that way" doc. Covers SQLite WAL deeper than the project README, Postgres index theory in the context of our queries, and the specific optimizations that made the mainnet-safe report possible.
 
-> Looking for ready-to-run queries against the SQLite stats DBs (peak RAM, disk / `lsm/` size, row counts, …)? See [12 - Useful queries](12-useful-queries.md).
+> Looking for ready-to-run queries against the SQLite stats DBs (peak RAM, disk / `lsm/` size, row counts, ...)? See [12 - Useful queries](12-useful-queries.md).
 
 ## SQLite WAL mode
 

@@ -242,7 +242,7 @@ def fetch_era_sync(conn: psycopg2.extensions.connection) -> pd.DataFrame:
     the next-upgrade version many epochs before the hard fork activates.
 
     The proto-to-era mapping is applied in Python via `era_for()` rather than
-    a SQL CASE, so future eras can be added in one place (_common.ERA_BY_…).
+    a SQL CASE, so future eras can be added in one place (_common.ERA_BY_...).
     """
     sql = """
       WITH epoch_era AS (

@@ -221,7 +221,7 @@ The report is laid out in four sections (the same shape as the template):
 4. **This vs Previous** - only if you passed `--compare-to`.
 
 While it runs, it prints progress so you can see it's working, e.g.
-`[mainnet] rendering PNG 7/16: …` and the final HTML size.
+`[mainnet] rendering PNG 7/16: ...` and the final HTML size.
 
 > The output folder is **wiped of its own old files** (`*.png`, `report.md`,
 > `report.html`) at the start of each run, so a re-run never leaves stale or
@@ -289,7 +289,7 @@ up point-for-point. That's why every comparison section uses the slot axis.
 | Symptom | Cause & fix |
 |:---|:---|
 | `error: unrecognized arguments: 13.6.0.5-genesis mainnet` | You passed a full label with spaces, unquoted. Pass just the **token** (`--compare-to 13.6.0.5-genesis`), or quote the whole label. See [Naming](#naming-the-part-that-trips-people-up). |
-| `PNG export needs the 'kaleido' package…` | Install it: `pip install '.[report]'`. Or use `--format html`, which needs nothing extra. |
+| `PNG export needs the 'kaleido' package...` | Install it: `pip install '.[report]'`. Or use `--format html`, which needs nothing extra. |
 | "It looks like it's hanging." | It isn't - mainnet takes ~25-60 s and prints `[env] rendering PNG i/N` as it goes. The quiet stretch is the final HTML write (mainnet's file is large). |
 | The `report.html` is huge / slow to open | Use `--html-max-points 4000`, or `--format md` for small images. |
 | A section is missing or its plots are empty | That build/axis has no rows in the stats DB for that token. Check the token with `db-sync-plot.py --env <env> --list`. If only one build exists, comparisons are skipped on purpose. |

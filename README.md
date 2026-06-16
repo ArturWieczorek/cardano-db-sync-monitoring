@@ -354,7 +354,7 @@ Slot 420580 | Epoch 9 | Sync 2.25% | TipLag 11d | DB 198.70 MiB | CPU 69.9% | RS
 Slot 673880 | Epoch 15 | Sync 2.53% | TipLag 10d | DB 244.10 MiB | CPU 72.8% | RSS 111.8 MiB
 Slot 911700 | Epoch 21 | Sync 2.79% | TipLag 9.4d | DB 285.00 MiB | CPU 71.0% | RSS 112.2 MiB
 ^C
-Shutting down. Wrote 1248 samples to /…/data/cardano-db-sync/preprod.db.
+Shutting down. Wrote 1248 samples to /.../data/cardano-db-sync/preprod.db.
 ```
 
 Send `SIGINT` (Ctrl+C) or `SIGTERM` to stop cleanly. To survive SSH disconnects, run under `nohup`/`systemd`/`tmux`:
@@ -439,7 +439,7 @@ Slot 1234567 | Epoch 543 | Era Conway | Sync 100.00% | CPU 65.2% | RSS 4.4 GiB
 Slot 1234580 | Epoch 543 | Era Conway | Sync 100.00% | CPU 67.8% | RSS 4.4 GiB
 ...
 ^C
-Shutting down. Wrote 1248 samples to /…/data/cardano-node/preprod.db.
+Shutting down. Wrote 1248 samples to /.../data/cardano-node/preprod.db.
 ```
 
 Required:
@@ -606,7 +606,7 @@ This stops single-version plots from masquerading as comparisons when the older 
 
 ## Gap-aware plotting
 
-The plot scripts break their lines across sampling gaps. After loading samples from SQLite, the loaders detect consecutive samples whose wall-clock `ts` gap exceeds **5× that series' own median sample interval** and insert a NaN marker at the gap midpoint. Plotly's `Scatter` doesn't connect across NaN, so the line breaks visibly. The threshold is adaptive per series because collectors sample at different rates — ~10s for `node-resource-monitor`/`db-sync-resource-monitor` (threshold ≈50s), 60s for `node-db-size-monitor` (threshold ≈300s); it falls back to 50s only when a series has too few samples to measure. (A previously hardcoded 50s threshold broke the 60s disk series at every point and rendered an empty disk plot.)
+The plot scripts break their lines across sampling gaps. After loading samples from SQLite, the loaders detect consecutive samples whose wall-clock `ts` gap exceeds **5× that series' own median sample interval** and insert a NaN marker at the gap midpoint. Plotly's `Scatter` doesn't connect across NaN, so the line breaks visibly. The threshold is adaptive per series because collectors sample at different rates - ~10s for `node-resource-monitor`/`db-sync-resource-monitor` (threshold ≈50s), 60s for `node-db-size-monitor` (threshold ≈300s); it falls back to 50s only when a series has too few samples to measure. (A previously hardcoded 50s threshold broke the 60s disk series at every point and rendered an empty disk plot.)
 
 Without this, a multi-session sync (or any monitor restart) produced a misleading near-vertical "cliff" connecting the last sample of one session to the first of the next, even when there was no data between them. The gap break now reads correctly as "no data here" instead of "memory dropped 2 GB instantly".
 
@@ -759,7 +759,7 @@ The report has two cost-control flags. They affect which panels appear; nothing 
 | `--with-p95` | Adds a dashed p95 line over the avg-tx-size panel. | Adds 5-20 min (`PERCENTILE_CONT` sorts every `tx.size` per epoch). |
 | `--skip-slow` | Drops Plutus adoption + cumulative distinct assets (their panels are also omitted; the summary's Plutus line reads "skipped"). | Saves several minutes by skipping `redeemer` and `ma_tx_mint` ident scans. |
 
-The report also prints stage-by-stage progress (`[3/8] Rendering per-epoch HTML…`) and the total elapsed time on completion, so if any one query stalls you know which.
+The report also prints stage-by-stage progress (`[3/8] Rendering per-epoch HTML...`) and the total elapsed time on completion, so if any one query stalls you know which.
 
 # `db-sync-stats-report.py`
 
@@ -791,7 +791,7 @@ python3 scripts/db-sync-stats-report.py --env all --format html \
 
 Comparison sections always use the **slot** axis: the runs happened at different wall-clock times, so a time axis would shift the curves apart - slot number is the shared chain position that aligns them. The per-build sections still show both axes.
 
-Output goes to `reports/cardano-db-sync/<env>/` (`report.md` + PNGs and/or `report.html`). `--scale` controls PNG resolution (default 2); `--sqlite-db` overrides the DB path for a single `--env`. Progress is printed per figure (`[mainnet] rendering PNG 7/16: …`) and the HTML write reports its size.
+Output goes to `reports/cardano-db-sync/<env>/` (`report.md` + PNGs and/or `report.html`). `--scale` controls PNG resolution (default 2); `--sqlite-db` overrides the DB path for a single `--env`. Progress is printed per figure (`[mainnet] rendering PNG 7/16: ...`) and the HTML write reports its size.
 
 The interactive `report.html` is **self-contained** (Plotly inlined, works offline) but can get large for multi-day runs (mainnet ~94 MiB) since it embeds every data point. `--html-max-points N` downsamples each HTML trace to at most `N` points to shrink it - **PNGs stay full-resolution**, and it remains a single offline file. `~4000` is a good balance (visually identical for these smooth curves; roughly halves the file - mainnet ~94→~25 MiB, preprod ~20→~11 MiB). Omit the flag for full fidelity. The same machinery (`scripts/_report.py`) also backs the cardano-node report below.
 
@@ -1145,7 +1145,7 @@ If you're running two `cardano-node` (or two `cardano-db-sync`) instances on the
 Two risks with the default:
 
 1. **Silent drift on restart.** If the originally-matched process crashes and restarts, its new PID is likely larger than its sibling's. The next sample's `matches[0]` is then the *sibling*. CPU/RSS samples after that point are for the wrong process, with no visible signal that anything changed.
-2. **Sibling-takeover on death.** If the originally-matched process dies entirely, the sibling becomes the sole match - the monitor silently rolls onto it. The "Multiple…" warning disappears, so the failure looks like a recovery.
+2. **Sibling-takeover on death.** If the originally-matched process dies entirely, the sibling becomes the sole match - the monitor silently rolls onto it. The "Multiple..." warning disappears, so the failure looks like a recovery.
 
 ## The `--match-arg` flag
 
@@ -1199,7 +1199,7 @@ Note: running two heavy db-sync processes on one host inflates each one's resour
 
 Common messages from the monitor/plot/report scripts, what they mean, and what to do.
 
-## `Waiting for db-sync schema migration (block table not yet present)…`
+## `Waiting for db-sync schema migration (block table not yet present)...`
 
 The monitor was started before cardano-db-sync finished its schema migration on a fresh postgres database. Harmless - the monitor polls every 2 seconds and prints `block table is now present (waited Ns).` when ready, then proceeds normally. Ctrl-C is honored during the wait.
 
@@ -1221,7 +1221,7 @@ You're using `--x-axis time` against a SQLite DB whose `memory_metrics` table do
 - Run the current monitor briefly against the same `--env` - `init_db` runs `ALTER TABLE memory_metrics ADD COLUMN ts TEXT`, migrating the schema. The plot then works.
 - Or use `--x-axis slot` instead - slot-axis plots don't need timestamps.
 
-## `Warning: no rows in 'ingest_metrics' for the following requested versions: …`
+## `Warning: no rows in 'ingest_metrics' for the following requested versions: ...`
 
 The `ingest_metrics` and `table_rowcounts` tables were added later than `memory_metrics`/`cpu_metrics`. Older monitor runs don't have those rows. The plot drops the missing versions from the legend and adjusts the filename so a single-version plot doesn't masquerade as a comparison. `--metrics cpu_ram` (the default) still compares those older versions fine - only the newer-table metrics are affected.
 
@@ -1249,6 +1249,6 @@ python3 scripts/node-resource-monitor.py --env preprod --node-ver 11.0.1 --inter
 
 `--interval 1` (1 second) samples 10× more often, and a 1-2-second Byron epoch will land at least one sample. See [`docs/02-cardano-domain-primer.md`](docs/02-cardano-domain-primer.md#byron-era-epochs-were-shorter--and-that-matters-during-catch-up) for the full background.
 
-## `pandas only supports SQLAlchemy connectable…` (only from older builds)
+## `pandas only supports SQLAlchemy connectable...` (only from older builds)
 
 Old versions of `db-sync-epoch-report.py` passed a psycopg2 connection directly to `pd.read_sql_query`, which pandas warned about. Current builds use a thin cursor-based helper (`_db_sync_queries.query_df`) that avoids the warning without adding a SQLAlchemy dependency.

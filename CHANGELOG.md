@@ -387,7 +387,7 @@ documented internals, and CI.
   one for A/B comparison. The substring must appear somewhere in the matched
   process's command line (argv[0] including its full path, plus any argument);
   a plain `in` check, no regex. Without the flag, behaviour is unchanged
-  (first matching process wins, with the existing "Multiple … match" warning).
+  (first matching process wins, with the existing "Multiple ... match" warning).
   db-sync-resource-monitor's `get_process` was refactored from a simple `name.startswith`
   check to a full-cmdline matcher so the substring search has something
   meaningful to look at; see the new `_match_db_sync_process` method.
@@ -457,7 +457,7 @@ documented internals, and CI.
   Expensive on mainnet (5-20 min) so default-off.
 - **`--skip-slow`** opt-out: skips the per-epoch Plutus adoption and
   cumulative-distinct-assets queries when faster turnaround is needed.
-- **Stage-by-stage progress logging**: `[3/8] Rendering per-epoch HTML…` so a
+- **Stage-by-stage progress logging**: `[3/8] Rendering per-epoch HTML...` so a
   hang is locatable. Total elapsed time printed on completion.
 - **Per-epoch chart panels** now cover: block count, total fees, total output,
   avg + p95 tx size, sum tx size, plutus ratio, MA mint count, cumulative
@@ -643,7 +643,7 @@ documented internals, and CI.
 - **db-sync-plot `--metrics tables`: version label is now always visible.**
   Previously the table-rowcounts plot only put the version in legend entries
   when comparing multiple versions; for a single-version run the legend
-  showed just bare table names (`block`, `tx`, `tx_out`, …) and the chart
+  showed just bare table names (`block`, `tx`, `tx_out`, ...) and the chart
   title had no version either. The version was only encoded in the
   filename, which you lose the moment the HTML is opened standalone or
   shared as a screenshot. Now the version short token (e.g. `13.7.1.0`) is

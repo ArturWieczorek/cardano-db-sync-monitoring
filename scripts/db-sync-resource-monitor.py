@@ -302,7 +302,7 @@ class CardanoMonitor:
             except Exception:
                 pass  # postgres itself may not be ready yet; keep polling silently.
             if not notified:
-                print("Waiting for db-sync schema migration (block table not yet present)…")
+                print("Waiting for db-sync schema migration (block table not yet present)...")
                 notified = True
             time.sleep(poll)
             waited += poll

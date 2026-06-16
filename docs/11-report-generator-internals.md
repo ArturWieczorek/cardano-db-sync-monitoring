@@ -17,7 +17,7 @@ A report is produced by a small pipeline. Data starts as rows in a SQLite file
 and ends as images and HTML on disk. Each arrow is "turned into":
 
 ```
-   CLI flags (--env, --lsm, --inmemory, --compare-to, --format, …)
+   CLI flags (--env, --lsm, --inmemory, --compare-to, --format, ...)
         │
         ▼
    resolve version tokens  ──►  full labels   (e.g. "13.7.1.0-node-11.0.1"
@@ -129,13 +129,13 @@ the whole report.**
 
 ### 7. The `_report.py` helpers it calls
 
-- **`render_png(fig, path, …)`** - saves a Figure as a PNG via Plotly's
+- **`render_png(fig, path, ...)`** - saves a Figure as a PNG via Plotly's
   `write_image` (the `kaleido` backend). Responsive charts carry no fixed height,
   so it supplies a sensible default. If `kaleido` is missing it raises
   `KaleidoMissingError` with an install hint instead of a cryptic error.
-- **`assemble_markdown(title, sections, …)`** - plain string building: a heading
+- **`assemble_markdown(title, sections, ...)`** - plain string building: a heading
   per section and an `![caption](file.png)` per image.
-- **`assemble_html(title, sections, …, max_points)`** - emits one HTML page,
+- **`assemble_html(title, sections, ..., max_points)`** - emits one HTML page,
   embedding each Figure as an interactive chart. Plotly's JavaScript is inlined
   **once** (in the first chart) and reused by the rest, so the file works offline
   without bundling the library many times. If `max_points` is set, each figure is

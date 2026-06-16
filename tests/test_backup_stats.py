@@ -1,6 +1,6 @@
 """Functional tests for scripts/backup-stats.py.
 
-Doesn't shell out to the script — imports its functions directly so we exercise
+Doesn't shell out to the script - imports its functions directly so we exercise
 the sqlite3 backup API path. Uses pytest's tmp_path fixture so we never touch
 the real data/ directory.
 """
@@ -17,9 +17,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 def _load_backup_module():
     """Import scripts/backup-stats.py. The hyphen in the filename prevents
     plain `import backup-stats`, so we use importlib.util."""
-    spec = importlib.util.spec_from_file_location(
-        "backup_stats_module", SCRIPTS_DIR / "backup-stats.py"
-    )
+    spec = importlib.util.spec_from_file_location("backup_stats_module", SCRIPTS_DIR / "backup-stats.py")
     module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     spec.loader.exec_module(module)  # type: ignore[union-attr]
     return module
@@ -63,7 +61,7 @@ class TestBackupDb:
         assert rows == [(i, i * 1.5) for i in range(10)]
 
     def test_backup_unaffected_by_subsequent_source_writes(self, tmp_path: Path) -> None:
-        """The backup is a point-in-time snapshot — modifying the source after
+        """The backup is a point-in-time snapshot - modifying the source after
         backup must not change the backup's content."""
         src = tmp_path / "test.db"
         _make_test_db(src)
@@ -100,7 +98,7 @@ class TestListBackups:
         # Two backups of target.db
         b1 = backup_stats.backup_db(db)
         b2 = backup_stats.backup_db(db)
-        # A backup-shaped file for a DIFFERENT base name — should not be listed.
+        # A backup-shaped file for a DIFFERENT base name - should not be listed.
         other = tmp_path / "other.db.bak-20990101_000000"
         other.write_text("")
         results = backup_stats.list_backups(db)

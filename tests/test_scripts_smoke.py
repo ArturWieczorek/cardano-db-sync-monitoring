@@ -18,16 +18,19 @@ import pytest
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 
 SCRIPTS = [
-    "db-sync-monitor.py",
-    "node-monitor.py",
+    "db-sync-resource-monitor.py",
+    "node-resource-monitor.py",
     "db-sync-plot.py",
     "node-plot.py",
-    "db-sync-report.py",
+    "db-sync-epoch-report.py",
     "backup-stats.py",
     "rename-version.py",
     "node-db-size-monitor.py",
     "db-sync-ledger-size-monitor.py",
     "node-rts-monitor.py",
+    "db-sync-stats-report.py",
+    "node-stats-report.py",
+    "stats-summary.py",
 ]
 
 
@@ -41,13 +44,9 @@ def test_script_help_exits_zero(script: str) -> None:
         timeout=10,
     )
     assert result.returncode == 0, (
-        f"{script} --help exited {result.returncode}\n"
-        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        f"{script} --help exited {result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
-    assert "usage:" in result.stdout, (
-        f"{script} --help didn't print 'usage:' header\n"
-        f"stdout:\n{result.stdout}"
-    )
+    assert "usage:" in result.stdout, f"{script} --help didn't print 'usage:' header\nstdout:\n{result.stdout}"
 
 
 @pytest.mark.parametrize("script", SCRIPTS)
@@ -64,9 +63,7 @@ def test_script_missing_required_args_exits_nonzero(script: str) -> None:
         text=True,
         timeout=10,
     )
-    assert result.returncode != 0, (
-        f"{script} with no args unexpectedly exited 0\nstdout:\n{result.stdout}"
-    )
+    assert result.returncode != 0, f"{script} with no args unexpectedly exited 0\nstdout:\n{result.stdout}"
     # argparse error messages always start with `usage:` and contain `error:`.
     assert "usage:" in result.stderr
     assert "error:" in result.stderr
@@ -77,7 +74,7 @@ def test_db_sync_report_rejects_three_pg_dbnames() -> None:
     result = subprocess.run(
         [
             sys.executable,
-            str(SCRIPTS_DIR / "db-sync-report.py"),
+            str(SCRIPTS_DIR / "db-sync-epoch-report.py"),
             "--pg-dbname",
             "a,b,c",
         ],

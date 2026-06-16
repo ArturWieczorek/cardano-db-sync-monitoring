@@ -1,5 +1,5 @@
-"""Tests for compute_epoch_durations — wall-clock duration per epoch from
-node-monitor samples.
+"""Tests for compute_epoch_durations - wall-clock duration per epoch from
+node-resource-monitor samples.
 
 This is the core math behind node-plot.py's `--metrics ingest` mode (sync time
 by era + per-epoch duration line). It groups samples by (version, epoch_no)
@@ -19,11 +19,13 @@ def _df(rows: list[tuple]) -> pd.DataFrame:
 
 class TestSingleEpoch:
     def test_multiple_samples_compute_max_minus_min(self):
-        df = _df([
-            ("2026-01-01 00:00:00", "v1", 100, "Babbage"),
-            ("2026-01-01 00:00:30", "v1", 100, "Babbage"),
-            ("2026-01-01 00:01:30", "v1", 100, "Babbage"),
-        ])
+        df = _df(
+            [
+                ("2026-01-01 00:00:00", "v1", 100, "Babbage"),
+                ("2026-01-01 00:00:30", "v1", 100, "Babbage"),
+                ("2026-01-01 00:01:30", "v1", 100, "Babbage"),
+            ]
+        )
         out = compute_epoch_durations(df)
         assert len(out) == 1
         row = out.iloc[0]
@@ -42,25 +44,29 @@ class TestSingleEpoch:
 
 class TestMultipleEpochs:
     def test_independent_per_epoch_groups(self):
-        df = _df([
-            ("2026-01-01 00:00:00", "v1", 100, "Babbage"),
-            ("2026-01-01 00:01:00", "v1", 100, "Babbage"),
-            ("2026-01-01 00:02:00", "v1", 101, "Babbage"),  # different epoch
-            ("2026-01-01 00:04:00", "v1", 101, "Babbage"),
-        ])
+        df = _df(
+            [
+                ("2026-01-01 00:00:00", "v1", 100, "Babbage"),
+                ("2026-01-01 00:01:00", "v1", 100, "Babbage"),
+                ("2026-01-01 00:02:00", "v1", 101, "Babbage"),  # different epoch
+                ("2026-01-01 00:04:00", "v1", 101, "Babbage"),
+            ]
+        )
         out = compute_epoch_durations(df).sort_values("epoch_no").reset_index(drop=True)
         assert len(out) == 2
-        assert out.iloc[0]["duration_sec"] == 60.0   # epoch 100: 1 min
+        assert out.iloc[0]["duration_sec"] == 60.0  # epoch 100: 1 min
         assert out.iloc[1]["duration_sec"] == 120.0  # epoch 101: 2 min
 
     def test_era_transition(self):
         # Epoch in Babbage, then epoch in Conway.
-        df = _df([
-            ("2026-01-01 00:00:00", "v1", 162, "Babbage"),
-            ("2026-01-01 00:02:00", "v1", 162, "Babbage"),
-            ("2026-01-01 00:03:00", "v1", 163, "Conway"),
-            ("2026-01-01 00:04:00", "v1", 163, "Conway"),
-        ])
+        df = _df(
+            [
+                ("2026-01-01 00:00:00", "v1", 162, "Babbage"),
+                ("2026-01-01 00:02:00", "v1", 162, "Babbage"),
+                ("2026-01-01 00:03:00", "v1", 163, "Conway"),
+                ("2026-01-01 00:04:00", "v1", 163, "Conway"),
+            ]
+        )
         out = compute_epoch_durations(df).sort_values("epoch_no").reset_index(drop=True)
         assert out.iloc[0]["era"] == "Babbage"
         assert out.iloc[1]["era"] == "Conway"
@@ -69,12 +75,14 @@ class TestMultipleEpochs:
 class TestMultiVersion:
     def test_versions_isolated(self):
         # Same epoch_no, different versions → separate rows.
-        df = _df([
-            ("2026-01-01 00:00:00", "v1", 100, "Babbage"),
-            ("2026-01-01 00:01:00", "v1", 100, "Babbage"),
-            ("2026-01-01 00:00:00", "v2", 100, "Babbage"),
-            ("2026-01-01 00:03:00", "v2", 100, "Babbage"),
-        ])
+        df = _df(
+            [
+                ("2026-01-01 00:00:00", "v1", 100, "Babbage"),
+                ("2026-01-01 00:01:00", "v1", 100, "Babbage"),
+                ("2026-01-01 00:00:00", "v2", 100, "Babbage"),
+                ("2026-01-01 00:03:00", "v2", 100, "Babbage"),
+            ]
+        )
         out = compute_epoch_durations(df)
         assert len(out) == 2
         durations = {row["version"]: row["duration_sec"] for _, row in out.iterrows()}
@@ -95,11 +103,13 @@ class TestRobustness:
         assert list(out.columns) == ["version", "epoch_no", "era", "duration_sec"]
 
     def test_unsorted_input_handled(self):
-        # Samples arrive out of order — max/min must still produce the right span.
-        df = _df([
-            ("2026-01-01 00:02:00", "v1", 100, "Babbage"),
-            ("2026-01-01 00:00:00", "v1", 100, "Babbage"),
-            ("2026-01-01 00:01:00", "v1", 100, "Babbage"),
-        ])
+        # Samples arrive out of order - max/min must still produce the right span.
+        df = _df(
+            [
+                ("2026-01-01 00:02:00", "v1", 100, "Babbage"),
+                ("2026-01-01 00:00:00", "v1", 100, "Babbage"),
+                ("2026-01-01 00:01:00", "v1", 100, "Babbage"),
+            ]
+        )
         out = compute_epoch_durations(df)
         assert out.iloc[0]["duration_sec"] == 120.0

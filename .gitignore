@@ -18,6 +18,7 @@ htmlcov/
 /data/
 /plots/
 /stats/
+/reports/
 
 # Secrets and logs
 .env

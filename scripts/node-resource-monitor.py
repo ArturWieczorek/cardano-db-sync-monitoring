@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Long-running collector for cardano-node. Samples CPU/RAM via psutil and the
-node's tip via cardano-cli. Pure collector — no plotting, no prompts."""
+node's tip via cardano-cli. Pure collector - no plotting, no prompts."""
 
 import argparse
 import json
@@ -16,6 +16,7 @@ from typing import Any
 
 import psutil
 from _common import (
+    connect_writer,
     find_processes,
     format_size,
     get_cpu_details,
@@ -38,10 +39,17 @@ TESTNET_MAGIC_BY_ENV: dict[str, int] = {
 
 
 class CardanoNodeMonitor:
-    def __init__(self, env: str, node_ver: str, cardano_cli_path: str,
-                 cardano_node_path: str, socket_path: str | None,
-                 interval: float, emit_json: bool,
-                 match_arg: str | None = None) -> None:
+    def __init__(
+        self,
+        env: str,
+        node_ver: str,
+        cardano_cli_path: str,
+        cardano_node_path: str,
+        socket_path: str | None,
+        interval: float,
+        emit_json: bool,
+        match_arg: str | None = None,
+    ) -> None:
         self.running: bool = True
         self.env: str = env
         self.node_ver: str = node_ver
@@ -65,7 +73,7 @@ class CardanoNodeMonitor:
 
     def init_db(self) -> None:
         init_sqlite_schema(self.db_file, version_table="node_version")
-        with sqlite3.connect(self.db_file) as conn:
+        with connect_writer(self.db_file) as conn:
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS node_ingest_metrics
                    (ts TEXT, slot_no INTEGER, epoch_no INTEGER, era TEXT,
@@ -160,9 +168,17 @@ class CardanoNodeMonitor:
     def stop(self, *_args: Any) -> None:
         self.running = False
 
-    def emit_sample(self, *, ts: str, slot: int, epoch: int | None, era: str | None,
-                    sync_progress: float | None, mem: dict[str, float] | None,
-                    cpu: dict[str, Any] | None) -> None:
+    def emit_sample(
+        self,
+        *,
+        ts: str,
+        slot: int,
+        epoch: int | None,
+        era: str | None,
+        sync_progress: float | None,
+        mem: dict[str, float] | None,
+        cpu: dict[str, Any] | None,
+    ) -> None:
         if self.emit_json:
             line = {
                 "ts": ts,
@@ -184,17 +200,12 @@ class CardanoNodeMonitor:
         sync_str = f"{sync_progress:.2f}%" if sync_progress is not None else "N/A"
         cpu_str = f"{cpu['cpu_percent']:.1f}%" if cpu else "N/A"
         rss_str = format_size(mem["rss"] if mem else None)
-        print(
-            f"Slot {slot} | Epoch {epoch_str} | Era {era_str} | Sync {sync_str} | "
-            f"CPU {cpu_str} | RSS {rss_str}"
-        )
+        print(f"Slot {slot} | Epoch {epoch_str} | Era {era_str} | Sync {sync_str} | CPU {cpu_str} | RSS {rss_str}")
 
     def run(self) -> None:
         print(
             f"=== cardano-node monitor | env={self.env} | label={self.node_ver} | "
-            f"interval={self.interval}s"
-            + (" | output=json" if self.emit_json else "")
-            + " ==="
+            f"interval={self.interval}s" + (" | output=json" if self.emit_json else "") + " ==="
         )
         signal.signal(signal.SIGINT, self.stop)
         signal.signal(signal.SIGTERM, self.stop)
@@ -232,37 +243,68 @@ class CardanoNodeMonitor:
             cpu = get_cpu_details(proc) if proc else None
             ts = datetime.now().isoformat()
 
-            with sqlite3.connect(self.db_file) as conn:
-                if mem:
+            try:
+                with connect_writer(self.db_file) as conn:
+                    if mem:
+                        conn.execute(
+                            "INSERT INTO memory_metrics (ts, slot_no, rss, vms, uss, pss, shared, swap, version) "
+                            "VALUES (?,?,?,?,?,?,?,?,?)",
+                            (
+                                ts,
+                                slot,
+                                mem["rss"],
+                                mem["vms"],
+                                mem["uss"],
+                                mem["pss"],
+                                mem["shared"],
+                                mem["swap"],
+                                self.run_label,
+                            ),
+                        )
+                    if cpu:
+                        conn.execute(
+                            "INSERT INTO cpu_metrics (ts, slot_no, cpu_percent, user_time, system_time, "
+                            "children_user, children_system, iowait, ctx_switches, interrupts, version) "
+                            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                            (
+                                ts,
+                                slot,
+                                cpu["cpu_percent"],
+                                cpu["user_time"],
+                                cpu["system_time"],
+                                cpu["children_user"],
+                                cpu["children_system"],
+                                cpu["iowait"],
+                                cpu["ctx_switches"],
+                                cpu["interrupts"],
+                                self.run_label,
+                            ),
+                        )
                     conn.execute(
-                        "INSERT INTO memory_metrics (ts, slot_no, rss, vms, uss, pss, shared, swap, version) "
-                        "VALUES (?,?,?,?,?,?,?,?,?)",
-                        (ts, slot, mem["rss"], mem["vms"], mem["uss"],
-                         mem["pss"], mem["shared"], mem["swap"], self.run_label),
+                        "INSERT INTO node_version VALUES (?,?)",
+                        (ts, self.run_label),
                     )
-                if cpu:
                     conn.execute(
-                        "INSERT INTO cpu_metrics (ts, slot_no, cpu_percent, user_time, system_time, "
-                        "children_user, children_system, iowait, ctx_switches, interrupts, version) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                        (ts, slot, cpu["cpu_percent"], cpu["user_time"], cpu["system_time"],
-                         cpu["children_user"], cpu["children_system"],
-                         cpu["iowait"], cpu["ctx_switches"], cpu["interrupts"], self.run_label),
+                        "INSERT INTO node_ingest_metrics (ts, slot_no, epoch_no, era, sync_progress, version) "
+                        "VALUES (?,?,?,?,?,?)",
+                        (ts, slot, epoch, era, sync_progress, self.run_label),
                     )
-                conn.execute(
-                    "INSERT INTO node_version VALUES (?,?)",
-                    (ts, self.run_label),
-                )
-                conn.execute(
-                    "INSERT INTO node_ingest_metrics (ts, slot_no, epoch_no, era, sync_progress, version) "
-                    "VALUES (?,?,?,?,?,?)",
-                    (ts, slot, epoch, era, sync_progress, self.run_label),
-                )
+            except sqlite3.OperationalError as e:
+                # Another writer held the lock past the busy timeout (rare). Drop
+                # this one sample with a warning rather than killing a multi-day run.
+                warn(f"DB busy, dropped sample at {ts}: {e}")
+                time.sleep(self.interval)
+                continue
 
             rows += 1
             self.emit_sample(
-                ts=ts, slot=slot, epoch=epoch, era=era,
-                sync_progress=sync_progress, mem=mem, cpu=cpu,
+                ts=ts,
+                slot=slot,
+                epoch=epoch,
+                era=era,
+                sync_progress=sync_progress,
+                mem=mem,
+                cpu=cpu,
             )
             time.sleep(self.interval)
 
@@ -271,47 +313,49 @@ class CardanoNodeMonitor:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Cardano Node resources monitor (collector)")
-    parser.add_argument("--env",
-                        required=True,
-                        choices=["mainnet", "preprod", "preview"],
-                        help="Environment name (network is derived from this)")
-    parser.add_argument("--node-ver",
-                        required=True,
-                        help="Label used to tag this run in the DB (e.g. 11.0.1, test-refactor-11.0.1)")
-    parser.add_argument("--cardano-cli-path",
-                        default="cardano-cli",
-                        help="Path to cardano-cli executable")
-    parser.add_argument("--cardano-node-path",
-                        default="cardano-node",
-                        help="Executable name/path of the cardano-node process")
-    parser.add_argument("--socket-path",
-                        help="Override the node socket path. By default the script reads "
-                             "--socket-path from the matched cardano-node process's command line, "
-                             "so you usually don't need to set this.")
-    parser.add_argument("--interval",
-                        type=float,
-                        default=10.0,
-                        help="Sampling interval in seconds (default: 10)")
-    parser.add_argument("--json",
-                        dest="emit_json",
-                        action="store_true",
-                        help="Emit one JSON object per sample on stdout (instead of the "
-                             "human-readable pipe-separated form).")
-    parser.add_argument("--match-arg",
-                        default=None,
-                        help="Additional substring required to appear somewhere in the matched "
-                             "cardano-node process's command line (argv[0] including path + any "
-                             "argument). Use to disambiguate when multiple instances of the same "
-                             "env are running on one host (e.g. --match-arg lsm to pick the LSM "
-                             "node and ignore an in-memory one). If unset, only the env name is "
-                             "used to disambiguate.")
+    parser.add_argument(
+        "--env",
+        required=True,
+        choices=["mainnet", "preprod", "preview"],
+        help="Environment name (network is derived from this)",
+    )
+    parser.add_argument(
+        "--node-ver", required=True, help="Label used to tag this run in the DB (e.g. 11.0.1, test-refactor-11.0.1)"
+    )
+    parser.add_argument("--cardano-cli-path", default="cardano-cli", help="Path to cardano-cli executable")
+    parser.add_argument(
+        "--cardano-node-path", default="cardano-node", help="Executable name/path of the cardano-node process"
+    )
+    parser.add_argument(
+        "--socket-path",
+        help="Override the node socket path. By default the script reads "
+        "--socket-path from the matched cardano-node process's command line, "
+        "so you usually don't need to set this.",
+    )
+    parser.add_argument("--interval", type=float, default=10.0, help="Sampling interval in seconds (default: 10)")
+    parser.add_argument(
+        "--json",
+        dest="emit_json",
+        action="store_true",
+        help="Emit one JSON object per sample on stdout (instead of the human-readable pipe-separated form).",
+    )
+    parser.add_argument(
+        "--match-arg",
+        default=None,
+        help="Additional substring required to appear somewhere in the matched "
+        "cardano-node process's command line (argv[0] including path + any "
+        "argument). Use to disambiguate when multiple instances of the same "
+        "env are running on one host (e.g. --match-arg lsm to pick the LSM "
+        "node and ignore an in-memory one). If unset, only the env name is "
+        "used to disambiguate.",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     # Different mypy/typeshed versions report this under different codes
     # (`attr-defined` on some, `union-attr` on others) because sys.stdout's
-    # declared type changes — list both so the ignore matches either env.
+    # declared type changes - list both so the ignore matches either env.
     sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined,union-attr]
     args = parse_args()
     monitor = CardanoNodeMonitor(

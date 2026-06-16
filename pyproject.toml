@@ -18,6 +18,11 @@ dev = [
     "mypy>=1.10,<2",
     "pre-commit>=4,<5",
 ]
+# Static PNG export for the *-stats-report.py tools (Plotly's image backend).
+# Only needed for Markdown/PNG report output; interactive HTML needs none of it.
+report = [
+    "kaleido>=0.2,<1",
+]
 
 [build-system]
 requires = ["hatchling"]

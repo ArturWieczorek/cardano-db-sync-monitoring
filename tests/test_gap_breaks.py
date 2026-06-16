@@ -1,4 +1,4 @@
-"""Tests for insert_gap_breaks — the helper that inserts NaN-marker rows where
+"""Tests for insert_gap_breaks - the helper that inserts NaN-marker rows where
 consecutive samples are separated by a wall-clock gap > threshold.
 
 Without these markers, plotly draws a misleading straight line across periods
@@ -19,11 +19,13 @@ def _df(rows: list[tuple]) -> pd.DataFrame:
 
 class TestNoGap:
     def test_consecutive_samples_unchanged(self):
-        df = _df([
-            ("2026-01-01 00:00:00", "v1", 100.0),
-            ("2026-01-01 00:00:10", "v1", 110.0),
-            ("2026-01-01 00:00:20", "v1", 120.0),
-        ])
+        df = _df(
+            [
+                ("2026-01-01 00:00:00", "v1", 100.0),
+                ("2026-01-01 00:00:10", "v1", 110.0),
+                ("2026-01-01 00:00:20", "v1", 120.0),
+            ]
+        )
         out = insert_gap_breaks(df, ["version"], gap_sec=50.0)
         assert len(out) == 3
         # All original values present; no NaN row added.
@@ -43,13 +45,15 @@ class TestNoGap:
 
 class TestWithGap:
     def test_one_gap_inserts_one_break(self):
-        df = _df([
-            ("2026-01-01 00:00:00", "v1", 100.0),
-            ("2026-01-01 00:00:10", "v1", 110.0),
-            # Gap: 1 hour
-            ("2026-01-01 01:00:00", "v1", 200.0),
-            ("2026-01-01 01:00:10", "v1", 210.0),
-        ])
+        df = _df(
+            [
+                ("2026-01-01 00:00:00", "v1", 100.0),
+                ("2026-01-01 00:00:10", "v1", 110.0),
+                # Gap: 1 hour
+                ("2026-01-01 01:00:00", "v1", 200.0),
+                ("2026-01-01 01:00:10", "v1", 210.0),
+            ]
+        )
         out = insert_gap_breaks(df, ["version"], gap_sec=50.0)
         # 4 original rows + 1 break row
         assert len(out) == 5
@@ -63,21 +67,25 @@ class TestWithGap:
         assert nan_rows.iloc[0]["version"] == "v1"
 
     def test_multiple_gaps_one_break_each(self):
-        df = _df([
-            ("2026-01-01 00:00:00", "v1", 100.0),
-            ("2026-01-01 00:10:00", "v1", 200.0),  # gap
-            ("2026-01-01 00:10:10", "v1", 210.0),
-            ("2026-01-01 00:20:00", "v1", 300.0),  # gap
-        ])
+        df = _df(
+            [
+                ("2026-01-01 00:00:00", "v1", 100.0),
+                ("2026-01-01 00:10:00", "v1", 200.0),  # gap
+                ("2026-01-01 00:10:10", "v1", 210.0),
+                ("2026-01-01 00:20:00", "v1", 300.0),  # gap
+            ]
+        )
         out = insert_gap_breaks(df, ["version"], gap_sec=50.0)
         assert out["rss"].isna().sum() == 2
 
     def test_sub_threshold_gap_no_break(self):
         # Gap = 30s, threshold = 50s → no marker.
-        df = _df([
-            ("2026-01-01 00:00:00", "v1", 100.0),
-            ("2026-01-01 00:00:30", "v1", 110.0),
-        ])
+        df = _df(
+            [
+                ("2026-01-01 00:00:00", "v1", 100.0),
+                ("2026-01-01 00:00:30", "v1", 110.0),
+            ]
+        )
         out = insert_gap_breaks(df, ["version"], gap_sec=50.0)
         assert len(out) == 2
         assert out["rss"].notna().all()
@@ -85,14 +93,16 @@ class TestWithGap:
 
 class TestMultiGroup:
     def test_gap_only_in_one_group(self):
-        df = _df([
-            ("2026-01-01 00:00:00", "v1", 100.0),
-            ("2026-01-01 00:00:10", "v1", 110.0),
-            ("2026-01-01 01:00:00", "v1", 200.0),  # v1 gap
-            ("2026-01-01 00:00:00", "v2", 50.0),
-            ("2026-01-01 00:00:10", "v2", 55.0),
-            ("2026-01-01 00:00:20", "v2", 60.0),
-        ])
+        df = _df(
+            [
+                ("2026-01-01 00:00:00", "v1", 100.0),
+                ("2026-01-01 00:00:10", "v1", 110.0),
+                ("2026-01-01 01:00:00", "v1", 200.0),  # v1 gap
+                ("2026-01-01 00:00:00", "v2", 50.0),
+                ("2026-01-01 00:00:10", "v2", 55.0),
+                ("2026-01-01 00:00:20", "v2", 60.0),
+            ]
+        )
         out = insert_gap_breaks(df, ["version"], gap_sec=50.0)
         # Only v1's gap inserts a marker.
         nan = out[out["rss"].isna()]
@@ -120,11 +130,13 @@ class TestMultiGroup:
 
 class TestRobustness:
     def test_all_null_ts_passthrough(self):
-        df = pd.DataFrame({
-            "ts": [pd.NaT, pd.NaT],
-            "version": ["v1", "v1"],
-            "rss": [1.0, 2.0],
-        })
+        df = pd.DataFrame(
+            {
+                "ts": [pd.NaT, pd.NaT],
+                "version": ["v1", "v1"],
+                "rss": [1.0, 2.0],
+            }
+        )
         out = insert_gap_breaks(df, ["version"], gap_sec=50.0)
         # When the entire ts column is NaT, the function returns the input
         # untouched (it can't measure gaps without timestamps).
@@ -134,3 +146,44 @@ class TestRobustness:
         df = pd.DataFrame({"version": ["v1"], "rss": [1.0]})
         out = insert_gap_breaks(df, ["version"], gap_sec=50.0)
         assert out.equals(df)
+
+
+class TestAdaptiveThreshold:
+    """With no explicit gap_sec, the threshold adapts to each series' own
+    cadence (5x the median inter-sample interval). This is what fixed the empty
+    disk plot: the disk collector samples every 60s, and the old fixed 50s
+    default treated every normal sample as a gap, breaking the line everywhere.
+    """
+
+    def _cadence(self, step_sec: int, n: int, start="2026-01-01 00:00:00"):
+        base = pd.Timestamp(start)
+        return _df([(str(base + pd.Timedelta(seconds=step_sec * i)), "v1", float(i)) for i in range(n)])
+
+    def test_60s_cadence_not_broken_at_every_point(self):
+        # The regression: a steady 60s series must NOT get a break between every
+        # pair of points (which rendered the disk plot empty).
+        df = self._cadence(step_sec=60, n=10)
+        out = insert_gap_breaks(df, ["version"])  # adaptive default
+        assert out["rss"].isna().sum() == 0
+        assert len(out) == 10
+
+    def test_60s_cadence_breaks_only_real_outage(self):
+        # Steady 60s cadence, then a 1h outage, then more 60s samples.
+        df = _df(
+            [
+                ("2026-01-01 00:00:00", "v1", 0.0),
+                ("2026-01-01 00:01:00", "v1", 1.0),
+                ("2026-01-01 00:02:00", "v1", 2.0),
+                ("2026-01-01 01:02:00", "v1", 3.0),  # ~1h outage
+                ("2026-01-01 01:03:00", "v1", 4.0),
+            ]
+        )
+        out = insert_gap_breaks(df, ["version"])  # adaptive default
+        assert out["rss"].isna().sum() == 1
+
+    def test_explicit_gap_sec_still_overrides(self):
+        # Passing gap_sec keeps the old fixed-threshold behavior: a 60s series
+        # under a 50s threshold breaks at every step.
+        df = self._cadence(step_sec=60, n=4)
+        out = insert_gap_breaks(df, ["version"], gap_sec=50.0)
+        assert out["rss"].isna().sum() == 3  # break between each of the 4 points

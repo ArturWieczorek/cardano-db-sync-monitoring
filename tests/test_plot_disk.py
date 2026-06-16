@@ -5,9 +5,9 @@ Coverage:
   - plot_disk: lsm row shown only when an lsm subdir exists; GB y-axis; one
     total trace per version; filename tagged _disk_by_time.
   - render_disk: GRACEFUL no-op (never raises) when the disk_metrics table or
-    rows are absent — this is the property that keeps `--metrics all` working
+    rows are absent - this is the property that keeps `--metrics all` working
     on every pre-existing DB, which has no disk_metrics.
-  - main(--metrics all): the regression guard the user explicitly asked for —
+  - main(--metrics all): the regression guard the user explicitly asked for -
     on a DB with cpu_ram data but NO disk_metrics, `all` still renders the
     other plots and skips disk without crashing; once disk_metrics exists, the
     disk HTML appears too.
@@ -57,7 +57,7 @@ def capture_figure(monkeypatch: pytest.MonkeyPatch) -> dict:
     return captured
 
 
-GIB = 1024 ** 3
+GIB = 1024**3
 
 
 def _seed_disk(db_file: str, rows: list[tuple]) -> None:
@@ -72,6 +72,14 @@ def _seed_disk(db_file: str, rows: list[tuple]) -> None:
         conn.commit()
 
 
+def _seed_memory(db_file: str, rows: list[tuple]) -> None:
+    """rows: (ts, slot_no, version). The resource series the disk slot is derived from."""
+    with sqlite3.connect(db_file) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS memory_metrics (ts TEXT, slot_no INTEGER, rss REAL, version TEXT)")
+        conn.executemany("INSERT INTO memory_metrics (ts, slot_no, version) VALUES (?,?,?)", rows)
+        conn.commit()
+
+
 # --- load_disk -------------------------------------------------------------
 
 
@@ -79,9 +87,12 @@ def _seed_disk(db_file: str, rows: list[tuple]) -> None:
 class TestLoadDisk:
     def test_columns_and_gib_conversion(self, mod, _label, tmp_path):
         db = str(tmp_path / "x.db")
-        _seed_disk(db, [
-            ("2026-06-03T10:00:00", None, "/db", 2 * GIB, 1 * GIB, "cardano-node v mainnet"),
-        ])
+        _seed_disk(
+            db,
+            [
+                ("2026-06-03T10:00:00", None, "/db", 2 * GIB, 1 * GIB, "cardano-node v mainnet"),
+            ],
+        )
         df = mod.load_disk(db, ["cardano-node v mainnet"])
         assert {"ts", "total_bytes", "lsm_bytes", "total_gb", "lsm_gb", "version"} <= set(df.columns)
         assert df["total_gb"].iloc[0] == pytest.approx(2.0)
@@ -90,24 +101,74 @@ class TestLoadDisk:
 
     def test_filters_to_requested_versions(self, mod, _label, tmp_path):
         db = str(tmp_path / "x.db")
-        _seed_disk(db, [
-            ("2026-06-03T10:00:00", None, "/db", GIB, 0, "cardano-node A mainnet"),
-            ("2026-06-03T10:00:00", None, "/db", GIB, 0, "cardano-node B mainnet"),
-        ])
+        _seed_disk(
+            db,
+            [
+                ("2026-06-03T10:00:00", None, "/db", GIB, 0, "cardano-node A mainnet"),
+                ("2026-06-03T10:00:00", None, "/db", GIB, 0, "cardano-node B mainnet"),
+            ],
+        )
         df = mod.load_disk(db, ["cardano-node A mainnet"])
         assert set(df["version"].dropna().unique()) == {"cardano-node A mainnet"}
 
-    def test_gap_break_inserts_nan_row(self, mod, _label, tmp_path):
-        # Two samples >50s apart -> insert_gap_breaks adds a NaN marker row so
-        # plotly breaks the line instead of drawing a cliff.
+    def test_slot_axis_derives_slot_from_memory_by_ts(self, mod, _label, tmp_path):
+        # disk_metrics has no slot; x_axis="slot" derives it by nearest ts from
+        # the concurrently-written memory_metrics so runs can be slot-aligned.
         db = str(tmp_path / "x.db")
-        _seed_disk(db, [
-            ("2026-06-03T10:00:00", None, "/db", GIB, 0, "cardano-node v mainnet"),
-            ("2026-06-03T10:05:00", None, "/db", 2 * GIB, 0, "cardano-node v mainnet"),
-        ])
-        df = mod.load_disk(db, ["cardano-node v mainnet"])
-        assert len(df) == 3  # 2 real + 1 gap-break marker
-        assert df["total_gb"].isna().any()
+        v = "cardano-node v mainnet"
+        _seed_disk(
+            db,
+            [
+                ("2026-06-03T10:00:30", None, "/db", GIB, 0, v),
+                ("2026-06-03T10:01:30", None, "/db", 2 * GIB, 0, v),
+            ],
+        )
+        _seed_memory(
+            db,
+            [
+                ("2026-06-03T10:00:00", 1000, v),
+                ("2026-06-03T10:01:00", 2000, v),
+                ("2026-06-03T10:02:00", 3000, v),
+            ],
+        )
+        df = mod.load_disk(db, [v], "slot").dropna(subset=["total_gb"])
+        # 10:00:30 -> nearest 10:01:00 (slot 2000) or 10:00:00 (1000); 10:01:30 -> 2000/3000.
+        assert df["slot_no"].notna().all()
+        assert set(df["slot_no"]) <= {1000, 2000, 3000}
+        assert df["slot_no"].is_monotonic_increasing or len(df) == 2
+
+    def test_slot_axis_no_memory_leaves_slot_nan(self, mod, _label, tmp_path):
+        db = str(tmp_path / "x.db")
+        v = "cardano-node v mainnet"
+        _seed_disk(db, [("2026-06-03T10:00:00", None, "/db", GIB, 0, v)])
+        df = mod.load_disk(db, [v], "slot")  # no memory_metrics seeded
+        assert "slot_no" in df.columns
+        assert df["slot_no"].notna().sum() == 0
+
+    def test_gap_break_inserts_nan_row(self, mod, _label, tmp_path):
+        # A run at the 60s disk cadence with a ~1h outage in the middle. The
+        # adaptive threshold (5x the 60s median = 300s) ignores the normal
+        # samples but breaks the line across the outage, so plotly draws a gap
+        # instead of a cliff. (Regression guard: a fixed 50s threshold used to
+        # break *every* 60s sample and render an empty plot.)
+        db = str(tmp_path / "x.db")
+        v = "cardano-node v mainnet"
+        _seed_disk(
+            db,
+            [
+                ("2026-06-03T10:00:00", None, "/db", GIB, 0, v),
+                ("2026-06-03T10:01:00", None, "/db", GIB, 0, v),
+                ("2026-06-03T10:02:00", None, "/db", GIB, 0, v),
+                # ~1h outage here
+                ("2026-06-03T11:00:00", None, "/db", 2 * GIB, 0, v),
+                ("2026-06-03T11:01:00", None, "/db", 2 * GIB, 0, v),
+            ],
+        )
+        df = mod.load_disk(db, [v])
+        assert len(df) == 6  # 5 real + exactly 1 gap-break marker
+        assert df["total_gb"].isna().sum() == 1
+        # The normal 60s cadence is NOT treated as a gap.
+        assert df["total_gb"].notna().sum() == 5
 
 
 # --- plot_disk -------------------------------------------------------------
@@ -115,10 +176,7 @@ class TestLoadDisk:
 
 def _disk_df(rows: list[tuple]) -> pd.DataFrame:
     """rows: (version, ts, total_bytes, lsm_bytes)."""
-    df = pd.DataFrame([
-        {"version": v, "ts": ts, "total_bytes": tb, "lsm_bytes": lb}
-        for (v, ts, tb, lb) in rows
-    ])
+    df = pd.DataFrame([{"version": v, "ts": ts, "total_bytes": tb, "lsm_bytes": lb} for (v, ts, tb, lb) in rows])
     df["ts"] = pd.to_datetime(df["ts"])
     df["total_gb"] = df["total_bytes"] / GIB
     df["lsm_gb"] = df["lsm_bytes"] / GIB
@@ -128,10 +186,12 @@ def _disk_df(rows: list[tuple]) -> pd.DataFrame:
 @pytest.mark.parametrize("mod,_label", PLOT_MODULES)
 class TestPlotDisk:
     def test_lsm_present_adds_second_row(self, mod, _label, tmp_path, capture_figure):
-        df = _disk_df([
-            ("cardano-node LSM mainnet", "2026-06-03T10:00:00", 3 * GIB, 1 * GIB),
-            ("cardano-node LSM mainnet", "2026-06-03T10:01:00", 4 * GIB, 1 * GIB),
-        ])
+        df = _disk_df(
+            [
+                ("cardano-node LSM mainnet", "2026-06-03T10:00:00", 3 * GIB, 1 * GIB),
+                ("cardano-node LSM mainnet", "2026-06-03T10:01:00", 4 * GIB, 1 * GIB),
+            ]
+        )
         mod.plot_disk(df, ["cardano-node LSM mainnet"], str(tmp_path), "mainnet")
         fig = capture_figure["fig"]
         # Total + LSM traces => 2 traces for one version.
@@ -141,10 +201,12 @@ class TestPlotDisk:
 
     def test_lsm_absent_single_row_only(self, mod, _label, tmp_path, capture_figure):
         # In-memory build: lsm_bytes all 0 -> no LSM row/traces at all.
-        df = _disk_df([
-            ("cardano-node INMEM mainnet", "2026-06-03T10:00:00", 3 * GIB, 0),
-            ("cardano-node INMEM mainnet", "2026-06-03T10:01:00", 4 * GIB, 0),
-        ])
+        df = _disk_df(
+            [
+                ("cardano-node INMEM mainnet", "2026-06-03T10:00:00", 3 * GIB, 0),
+                ("cardano-node INMEM mainnet", "2026-06-03T10:01:00", 4 * GIB, 0),
+            ]
+        )
         mod.plot_disk(df, ["cardano-node INMEM mainnet"], str(tmp_path), "mainnet")
         names = [t.name for t in capture_figure["fig"].data]
         assert any(n.startswith("Total -") for n in names)
@@ -152,10 +214,12 @@ class TestPlotDisk:
 
     def test_mixed_comparison_shows_lsm_row(self, mod, _label, tmp_path, capture_figure):
         # LSM vs in-memory: lsm row IS shown (the in-memory line at zero is the point).
-        df = _disk_df([
-            ("cardano-node LSM mainnet", "2026-06-03T10:00:00", 3 * GIB, 1 * GIB),
-            ("cardano-node INMEM mainnet", "2026-06-03T10:00:00", 3 * GIB, 0),
-        ])
+        df = _disk_df(
+            [
+                ("cardano-node LSM mainnet", "2026-06-03T10:00:00", 3 * GIB, 1 * GIB),
+                ("cardano-node INMEM mainnet", "2026-06-03T10:00:00", 3 * GIB, 0),
+            ]
+        )
         versions = ["cardano-node LSM mainnet", "cardano-node INMEM mainnet"]
         mod.plot_disk(df, versions, str(tmp_path), "mainnet")
         names = [t.name for t in capture_figure["fig"].data]
@@ -166,6 +230,25 @@ class TestPlotDisk:
         df = _disk_df([("cardano-node v mainnet", "2026-06-03T10:00:00", GIB, 0)])
         mod.plot_disk(df, ["cardano-node v mainnet"], str(tmp_path), "mainnet")
         assert capture_figure["path"].endswith("_disk_by_time.html")
+
+    def test_slot_axis_uses_slot_and_tags_filename(self, mod, _label, tmp_path, capture_figure):
+        df = _disk_df(
+            [
+                ("cardano-node v mainnet", "2026-06-03T10:00:00", GIB, 0),
+                ("cardano-node v mainnet", "2026-06-03T10:01:00", 2 * GIB, 0),
+            ]
+        )
+        df["slot_no"] = [1000, 2000]  # as load_disk(..., "slot") would attach
+        mod.plot_disk(df, ["cardano-node v mainnet"], str(tmp_path), "mainnet", "slot")
+        assert capture_figure["path"].endswith("_disk_by_slot.html")
+        assert list(capture_figure["fig"].data[0].x) == [1000, 2000]  # x is slot, not ts
+
+    def test_slot_axis_falls_back_to_time_without_slot(self, mod, _label, tmp_path, capture_figure, capsys):
+        df = _disk_df([("cardano-node v mainnet", "2026-06-03T10:00:00", GIB, 0)])
+        # no slot_no column at all -> requested slot can't be honored
+        mod.plot_disk(df, ["cardano-node v mainnet"], str(tmp_path), "mainnet", "slot")
+        assert capture_figure["path"].endswith("_disk_by_time.html")
+        assert "falling back to the time axis" in capsys.readouterr().out
 
     def test_y_axis_is_gib(self, mod, _label, tmp_path, capture_figure):
         df = _disk_df([("cardano-node v mainnet", "2026-06-03T10:00:00", 5 * GIB, 0)])
@@ -178,9 +261,13 @@ class TestPlotDisk:
 
 def _args(mod, db_file, tmp_path, metrics="disk"):
     return mod.Args(
-        env="mainnet", sqlite_db=db_file, outdir=str(tmp_path / "plots"),
-        versions=["cardano-node v mainnet"], list_only=False,
-        x_axis="time", metrics=metrics,
+        env="mainnet",
+        sqlite_db=db_file,
+        outdir=str(tmp_path / "plots"),
+        versions=["cardano-node v mainnet"],
+        list_only=False,
+        x_axis="time",
+        metrics=metrics,
     )
 
 
@@ -200,18 +287,24 @@ class TestRenderDiskGracefulSkip:
 
     def test_missing_version_does_not_raise(self, mod, _label, tmp_path, capsys):
         db = str(tmp_path / "x.db")
-        _seed_disk(db, [
-            ("2026-06-03T10:00:00", None, "/db", GIB, 0, "cardano-node OTHER mainnet"),
-        ])
+        _seed_disk(
+            db,
+            [
+                ("2026-06-03T10:00:00", None, "/db", GIB, 0, "cardano-node OTHER mainnet"),
+            ],
+        )
         mod.render_disk(_args(mod, db, tmp_path), ["cardano-node v mainnet"])
         assert "Skipping disk plot" in capsys.readouterr().out
 
     def test_present_rows_writes_html(self, mod, _label, tmp_path):
         db = str(tmp_path / "x.db")
-        _seed_disk(db, [
-            ("2026-06-03T10:00:00", None, "/db", GIB, 0, "cardano-node v mainnet"),
-            ("2026-06-03T10:01:00", None, "/db", 2 * GIB, 0, "cardano-node v mainnet"),
-        ])
+        _seed_disk(
+            db,
+            [
+                ("2026-06-03T10:00:00", None, "/db", GIB, 0, "cardano-node v mainnet"),
+                ("2026-06-03T10:01:00", None, "/db", 2 * GIB, 0, "cardano-node v mainnet"),
+            ],
+        )
         mod.render_disk(_args(mod, db, tmp_path), ["cardano-node v mainnet"])
         out = list((tmp_path / "plots").rglob("*_disk_by_time.html"))
         assert len(out) == 1
@@ -241,14 +334,17 @@ def _seed_version_and_cpuram(conn: sqlite3.Connection, version_table: str, versi
     )
     for i in range(2):
         ts = f"2026-06-03T10:0{i}:00"
-        conn.execute("INSERT INTO memory_metrics (ts, slot_no, rss, version) VALUES (?,?,?,?)",
-                     (ts, 100 + i, 500.0 + i, version))
-        conn.execute("INSERT INTO cpu_metrics (ts, slot_no, cpu_percent, version) VALUES (?,?,?,?)",
-                     (ts, 100 + i, 10.0 + i, version))
+        conn.execute(
+            "INSERT INTO memory_metrics (ts, slot_no, rss, version) VALUES (?,?,?,?)", (ts, 100 + i, 500.0 + i, version)
+        )
+        conn.execute(
+            "INSERT INTO cpu_metrics (ts, slot_no, cpu_percent, version) VALUES (?,?,?,?)",
+            (ts, 100 + i, 10.0 + i, version),
+        )
 
 
 def _seed_node_full(db_file: str, version: str) -> None:
-    """Everything node-monitor.py writes (cpu_ram + node_ingest_metrics), no disk."""
+    """Everything node-resource-monitor.py writes (cpu_ram + node_ingest_metrics), no disk."""
     with sqlite3.connect(db_file) as conn:
         _seed_version_and_cpuram(conn, "node_version", version)
         conn.execute(
@@ -265,7 +361,7 @@ def _seed_node_full(db_file: str, version: str) -> None:
 
 
 def _seed_dbsync_full(db_file: str, version: str) -> None:
-    """Everything db-sync-monitor.py writes (cpu_ram + ingest_metrics +
+    """Everything db-sync-resource-monitor.py writes (cpu_ram + ingest_metrics +
     table_rowcounts), no disk."""
     with sqlite3.connect(db_file) as conn:
         _seed_version_and_cpuram(conn, "db_sync_version", version)
@@ -286,8 +382,7 @@ def _seed_dbsync_full(db_file: str, version: str) -> None:
                 (ts, 100 + i, 10.0 - i, 1000 + i, 50 + i, 200 + i, None, version),
             )
             conn.execute(
-                "INSERT INTO table_rowcounts (ts, slot_no, table_name, row_count, version) "
-                "VALUES (?,?,?,?,?)",
+                "INSERT INTO table_rowcounts (ts, slot_no, table_name, row_count, version) VALUES (?,?,?,?,?)",
                 (ts, 100 + i, "block", 50 + i, version),
             )
         conn.commit()
@@ -295,8 +390,21 @@ def _seed_dbsync_full(db_file: str, version: str) -> None:
 
 def _run_main(mod, db, tmp_path, monkeypatch, script_name):
     outdir = str(tmp_path / "plots")
-    argv = [script_name, "--env", "mainnet", "--sqlite-db", db,
-            "--outdir", outdir, "--versions", "v", "--metrics", "all", "--x-axis", "time"]
+    argv = [
+        script_name,
+        "--env",
+        "mainnet",
+        "--sqlite-db",
+        db,
+        "--outdir",
+        outdir,
+        "--versions",
+        "v",
+        "--metrics",
+        "all",
+        "--x-axis",
+        "time",
+    ]
     monkeypatch.setattr("sys.argv", argv)
     mod.main()
 
@@ -319,10 +427,13 @@ def test_node_all_includes_disk_when_present(tmp_path, monkeypatch):
     db = str(tmp_path / "mainnet.db")
     version = "cardano-node v mainnet"
     _seed_node_full(db, version)
-    _seed_disk(db, [
-        ("2026-06-03T10:00:00", None, "/db", GIB, 0, version),
-        ("2026-06-03T10:01:00", None, "/db", 2 * GIB, 0, version),
-    ])
+    _seed_disk(
+        db,
+        [
+            ("2026-06-03T10:00:00", None, "/db", GIB, 0, version),
+            ("2026-06-03T10:01:00", None, "/db", 2 * GIB, 0, version),
+        ],
+    )
     _run_main(node_plot, db, tmp_path, monkeypatch, "node-plot.py")
     assert list((tmp_path / "plots").rglob("*_disk_by_time.html"))
 
@@ -343,9 +454,12 @@ def test_dbsync_all_includes_disk_when_present(tmp_path, monkeypatch):
     db = str(tmp_path / "mainnet.db")
     version = "cardano-db-sync v mainnet"
     _seed_dbsync_full(db, version)
-    _seed_disk(db, [
-        ("2026-06-03T10:00:00", None, "/ls", GIB, 0, version),
-        ("2026-06-03T10:01:00", None, "/ls", 2 * GIB, 0, version),
-    ])
+    _seed_disk(
+        db,
+        [
+            ("2026-06-03T10:00:00", None, "/ls", GIB, 0, version),
+            ("2026-06-03T10:01:00", None, "/ls", 2 * GIB, 0, version),
+        ],
+    )
     _run_main(dbsync_plot, db, tmp_path, monkeypatch, "db-sync-plot.py")
     assert list((tmp_path / "plots").rglob("*_disk_by_time.html"))

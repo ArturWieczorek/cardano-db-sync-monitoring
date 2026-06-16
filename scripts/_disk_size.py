@@ -8,7 +8,7 @@ version label, so the disk curve joins the rest of the run's metrics
 Kept separate from the main *-monitor.py loops on purpose: a ``du`` of a
 multi-hundred-GB mainnet directory is a heavy, cache-polluting tree walk, so it
 runs on its own coarse interval (60s default) rather than biasing the 10s
-CPU/RAM samples — and can be started/stopped independently.
+CPU/RAM samples - and can be started/stopped independently.
 
 The only per-role differences are captured by subclass attributes:
   - ``DATA_DIR``      where the role's SQLite DBs live
@@ -16,7 +16,7 @@ The only per-role differences are captured by subclass attributes:
   - ``PATH_FLAG``     argv flag carrying the directory to measure
   - ``LABEL_PREFIX``  version-label prefix (matches the *-monitor.py label)
   - ``ENV_IN_ARGV``   whether the env name must appear in argv (node: yes,
-                      db-sync: no — db-sync takes no env flag)
+                      db-sync: no - db-sync takes no env flag)
 
 Everything else (schema, sampling, loop, summary, signal handling) lives here.
 
@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 
 import psutil
-from _common import find_processes, format_bytes, warn
+from _common import connect_writer, find_processes, format_bytes, warn
 from psutil import Process
 
 # --- pure helpers (unit-tested directly) -----------------------------------
@@ -50,7 +50,10 @@ def du_bytes(path: str, timeout: float) -> int | None:
     try:
         out = subprocess.run(
             ["du", "-sb", path],
-            capture_output=True, text=True, check=True, timeout=timeout,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=timeout,
         )
         return int(out.stdout.split()[0])
     except subprocess.TimeoutExpired:
@@ -91,11 +94,19 @@ class DiskSizeMonitor:
     LABEL_PREFIX: str
     ENV_IN_ARGV: bool
 
-    def __init__(self, env: str, version: str, explicit_path: str | None,
-                 lsm_subdir: str, interval: float, du_timeout: float,
-                 emit_json: bool, sqlite_db: str | None,
-                 binary_prefix: str | None = None,
-                 match_arg: str | None = None) -> None:
+    def __init__(
+        self,
+        env: str,
+        version: str,
+        explicit_path: str | None,
+        lsm_subdir: str,
+        interval: float,
+        du_timeout: float,
+        emit_json: bool,
+        sqlite_db: str | None,
+        binary_prefix: str | None = None,
+        match_arg: str | None = None,
+    ) -> None:
         self.running: bool = True
         self.env: str = env
         self.version: str = version
@@ -105,7 +116,7 @@ class DiskSizeMonitor:
         self.du_timeout: float = du_timeout
         self.emit_json: bool = emit_json
         self.match_arg: str | None = match_arg
-        # Allow overriding the binary prefix (node-monitor exposes
+        # Allow overriding the binary prefix (node-resource-monitor exposes
         # --cardano-node-path for version-suffixed binaries); default to class.
         self.binary_prefix: str = binary_prefix or self.BINARY_PREFIX
         # Same label the *-monitor.py writes, so the disk series joins the run.
@@ -119,7 +130,7 @@ class DiskSizeMonitor:
     def init_db(self) -> None:
         """Create disk_metrics if absent. WAL mode so this collector can write
         concurrently with the main monitor on the same <env>.db."""
-        with sqlite3.connect(self.db_file) as conn:
+        with connect_writer(self.db_file) as conn:
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS disk_metrics
@@ -141,10 +152,34 @@ class DiskSizeMonitor:
         count = (row or [0])[0] or 0
         if count == 0:
             print(f"This version label has no existing disk samples in {self.db_file}.")
+            self._warn_if_label_looks_mistyped()
         else:
             print(
                 f"Note: this version label already has {count:,} disk samples in "
                 f"{self.db_file} (first {row[1]}, last {row[2]}). New samples will be appended."
+            )
+
+    def _warn_if_label_looks_mistyped(self) -> None:
+        """If this is a brand-new label but the DB already carries other labels,
+        the new one is probably a typo (e.g. passing the env-dir name instead of
+        the node version). List the existing labels so the mismatch is caught at
+        collection time, not weeks later when the plot silently drops the series."""
+        try:
+            with sqlite3.connect(self.db_file) as conn:
+                others = [
+                    r[0]
+                    for r in conn.execute(
+                        "SELECT DISTINCT version FROM disk_metrics WHERE version <> ?",
+                        (self.run_label,),
+                    ).fetchall()
+                ]
+        except Exception:
+            return
+        if others:
+            warn(
+                f"'{self.run_label}' is a new label; this DB already has: "
+                f"{', '.join(others)}. If that's a typo, stop and re-run with the "
+                "matching --node-ver (otherwise the plot won't group these together)."
             )
 
     # --- process / path discovery -----------------------------------------
@@ -174,8 +209,10 @@ class DiskSizeMonitor:
             return None
         if len(matches) > 1:
             pids = ", ".join(str(p.pid) for p in matches)
-            warn(f"Multiple {self.binary_prefix} processes match: {pids}. "
-                 f"Using PID {matches[0].pid}. Pass --match-arg to disambiguate.")
+            warn(
+                f"Multiple {self.binary_prefix} processes match: {pids}. "
+                f"Using PID {matches[0].pid}. Pass --match-arg to disambiguate."
+            )
         proc = matches[0]
         try:
             cmdline = proc.cmdline()
@@ -197,10 +234,9 @@ class DiskSizeMonitor:
         lsm = du_bytes(lsm_path, self.du_timeout) if os.path.isdir(lsm_path) else 0
         lsm = lsm if lsm is not None else 0
         ts = datetime.now().isoformat()
-        with sqlite3.connect(self.db_file) as conn:
+        with connect_writer(self.db_file) as conn:
             conn.execute(
-                "INSERT INTO disk_metrics (ts, slot_no, path, total_bytes, lsm_bytes, version) "
-                "VALUES (?,?,?,?,?,?)",
+                "INSERT INTO disk_metrics (ts, slot_no, path, total_bytes, lsm_bytes, version) VALUES (?,?,?,?,?,?)",
                 (ts, None, path, total, lsm, self.run_label),
             )
         return ts, total, lsm
@@ -208,11 +244,20 @@ class DiskSizeMonitor:
     def emit(self, path: str, total: int, lsm: int) -> None:
         if self.emit_json:
             import json
-            print(json.dumps({
-                "ts": datetime.now().isoformat(), "env": self.env, "label": self.version,
-                "version": self.run_label, "path": path,
-                "total_bytes": total, "lsm_bytes": lsm,
-            }))
+
+            print(
+                json.dumps(
+                    {
+                        "ts": datetime.now().isoformat(),
+                        "env": self.env,
+                        "label": self.version,
+                        "version": self.run_label,
+                        "path": path,
+                        "total_bytes": total,
+                        "lsm_bytes": lsm,
+                    }
+                )
+            )
         else:
             lsm_str = f" | lsm {format_bytes(lsm)}" if lsm else ""
             print(f"{path} | total {format_bytes(total)}{lsm_str}")
@@ -232,9 +277,7 @@ class DiskSizeMonitor:
     def run(self) -> None:
         print(
             f"=== {self.LABEL_PREFIX} disk-size monitor | env={self.env} | label={self.version} | "
-            f"interval={self.interval:.0f}s"
-            + (" | output=json" if self.emit_json else "")
-            + " ==="
+            f"interval={self.interval:.0f}s" + (" | output=json" if self.emit_json else "") + " ==="
         )
         signal.signal(signal.SIGINT, self.stop)
         signal.signal(signal.SIGTERM, self.stop)
@@ -242,8 +285,10 @@ class DiskSizeMonitor:
 
         path = self.resolve_path()
         if not path:
-            warn(f"Could not determine the directory to measure. Pass --path explicitly, "
-                 f"or ensure the {self.binary_prefix} process is running with {self.PATH_FLAG}.")
+            warn(
+                f"Could not determine the directory to measure. Pass --path explicitly, "
+                f"or ensure the {self.binary_prefix} process is running with {self.PATH_FLAG}."
+            )
             raise SystemExit(1)
         if not os.path.isdir(path):
             warn(f"Path is not a directory (yet?): {path}. Will keep retrying.")
@@ -254,7 +299,14 @@ class DiskSizeMonitor:
         peak_lsm = 0
         final_total: int | None = None
         while self.running:
-            sample = self.sample_once(path)
+            try:
+                sample = self.sample_once(path)
+            except sqlite3.OperationalError as e:
+                # Another writer held the lock past the busy timeout (rare). Drop
+                # this one sample with a warning rather than killing the run.
+                warn(f"DB busy, dropped sample: {e}")
+                self._sleep()
+                continue
             if sample is None:
                 self._sleep()
                 continue

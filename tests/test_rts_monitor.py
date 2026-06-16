@@ -1,11 +1,11 @@
-"""Tests for node-rts-monitor.py — the cardano-node Prometheus/RTS scraper.
+"""Tests for node-rts-monitor.py - the cardano-node Prometheus/RTS scraper.
 
 Pure parsing/selection/extraction is unit-tested directly; the HTTP fetch is
 exercised via a monkeypatched urlopen (no network); insertion is tested by
 feeding raw Prometheus text to `record()` against a tmp SQLite DB.
 
 Metric names vary across node versions / tracing backends, so the collector
-matches a substring allowlist rather than exact names — the tests use a mix of
+matches a substring allowlist rather than exact names - the tests use a mix of
 new-tracing (`cardano_node_metrics_RTS_*`) and old-EKG (`rts_gc_*`) shapes.
 """
 
@@ -120,15 +120,22 @@ class TestExtractSlot:
 class TestFetch:
     def test_success(self, monkeypatch):
         class FakeResp:
-            def __enter__(self): return self
-            def __exit__(self, *a): return False
-            def read(self): return b"foo 1\n"
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b"foo 1\n"
+
         monkeypatch.setattr(rts, "urlopen", lambda url, timeout: FakeResp())
         assert rts.fetch_metrics("http://x/metrics", 5) == "foo 1\n"
 
     def test_failure_returns_none(self, monkeypatch):
         def boom(url, timeout):
             raise OSError("connection refused")
+
         monkeypatch.setattr(rts, "urlopen", boom)
         assert rts.fetch_metrics("http://x/metrics", 5) is None  # must not raise
 
@@ -138,9 +145,14 @@ class TestFetch:
 
 def _mon(tmp_path, **kw):
     defaults = dict(
-        env="mainnet", node_ver="LSM-11.0.1", url="http://x/metrics",
-        includes=list(rts.DEFAULT_INCLUDE), interval=1, timeout=5,
-        emit_json=False, sqlite_db=str(tmp_path / "n.db"),
+        env="mainnet",
+        node_ver="LSM-11.0.1",
+        url="http://x/metrics",
+        includes=list(rts.DEFAULT_INCLUDE),
+        interval=1,
+        timeout=5,
+        emit_json=False,
+        sqlite_db=str(tmp_path / "n.db"),
     )
     defaults.update(kw)
     return rts.NodeRtsMonitor(**defaults)
@@ -159,21 +171,26 @@ class TestSchemaAndRecord:
         assert _mon(tmp_path).run_label == "cardano-node LSM-11.0.1 mainnet"
 
     def test_default_db_path(self, tmp_path):
-        m = rts.NodeRtsMonitor(env="preprod", node_ver="v", url="u",
-                               includes=["gc"], interval=1, timeout=1,
-                               emit_json=False, sqlite_db=None)
+        m = rts.NodeRtsMonitor(
+            env="preprod",
+            node_ver="v",
+            url="u",
+            includes=["gc"],
+            interval=1,
+            timeout=1,
+            emit_json=False,
+            sqlite_db=None,
+        )
         assert m.db_file.endswith("data/cardano-node/preprod.db")
 
     def test_record_inserts_selected_with_slot_and_label(self, tmp_path):
         m = _mon(tmp_path)
         result = m.record(SAMPLE)
         assert result is not None
-        _ts, slot, selected = result
+        _ts, slot, _selected = result
         assert slot == 1234567  # slot pulled from slotNum even though it's not in the allowlist
         with sqlite3.connect(m.db_file) as conn:
-            rows = conn.execute(
-                "SELECT metric, value, slot_no, version FROM rts_metrics ORDER BY metric"
-            ).fetchall()
+            rows = conn.execute("SELECT metric, value, slot_no, version FROM rts_metrics ORDER BY metric").fetchall()
         names = {r[0] for r in rows}
         assert "cardano_node_metrics_RTS_gcMajorNum_int" in names
         assert "cardano_node_metrics_txsInMempool_int" in names
@@ -194,3 +211,25 @@ class TestSchemaAndRecord:
         m.record(SAMPLE)
         m.report_existing()
         assert "already has" in capsys.readouterr().out
+
+
+class TestBusyResilience:
+    """A `database is locked` from a colliding writer must not kill the collector.
+
+    Several node collectors write to the same per-env DB; under WAL only one may
+    write at a time. connect_writer's busy timeout absorbs normal contention, but
+    if a writer still loses the race the run loop must warn and drop the scrape
+    rather than propagate OperationalError and end a multi-day run.
+    """
+
+    def test_run_survives_db_locked(self, tmp_path, monkeypatch, capsys):
+        m = _mon(tmp_path)
+        monkeypatch.setattr(rts, "fetch_metrics", lambda url, timeout: SAMPLE)
+
+        def boom(_text):
+            m.running = False  # one iteration, then exit the loop cleanly
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr(m, "record", boom)
+        m.run()  # must not raise
+        assert "DB busy" in capsys.readouterr().err

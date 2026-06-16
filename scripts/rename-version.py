@@ -2,7 +2,7 @@
 """Rename a version label across every version-keyed table in a stats DB.
 
 Wraps the manual `UPDATE ... SET version = ...` recipe from the README so
-renames go through a single source of truth — easy to forget tables when
+renames go through a single source of truth - easy to forget tables when
 typing the SQL by hand, and skipping `ingest_metrics` / `table_rowcounts`
 (db-sync) or `node_ingest_metrics` (node) leaves the plot script joining
 stale rows and silently dropping ingest/tables panels.
@@ -12,7 +12,8 @@ Schema (which tables carry a `version` column):
     db-sync DB: memory_metrics, cpu_metrics, db_sync_version,
                 ingest_metrics, table_rowcounts        (5 tables)
     node DB:    memory_metrics, cpu_metrics, node_version,
-                node_ingest_metrics                    (4 tables)
+                node_ingest_metrics, disk_metrics,
+                rts_metrics                            (6 tables)
 
 The script auto-detects role from the schema (presence of `db_sync_version`
 vs `node_version`) and updates every table in one transaction.
@@ -46,7 +47,7 @@ is actually what you want.
 import argparse
 
 # Import sibling module with a hyphen in its name. The type: ignore pair
-# matches the same pattern in tests/test_backup_stats.py — mypy's stubs for
+# matches the same pattern in tests/test_backup_stats.py - mypy's stubs for
 # importlib.util conservatively type spec_from_file_location as returning
 # `ModuleSpec | None`, and .loader as `Loader | None`. At runtime both are
 # non-None for a real file path, so narrow with ignores rather than asserts.
@@ -54,6 +55,8 @@ import importlib.util
 import sqlite3
 import sys
 from pathlib import Path
+
+from _common import VERSION_KEYED_TABLES, connect_writer
 
 _BACKUP_PATH = Path(__file__).resolve().with_name("backup-stats.py")
 _spec = importlib.util.spec_from_file_location("backup_stats", _BACKUP_PATH)
@@ -68,16 +71,9 @@ ROLE_DIR: dict[str, Path] = {
     "db-sync": PROJECT_ROOT / "data" / "cardano-db-sync",
 }
 
-VERSION_TABLES: dict[str, tuple[str, ...]] = {
-    "db-sync": (
-        "memory_metrics", "cpu_metrics", "db_sync_version",
-        "ingest_metrics", "table_rowcounts",
-    ),
-    "node": (
-        "memory_metrics", "cpu_metrics", "node_version",
-        "node_ingest_metrics",
-    ),
-}
+# The authoritative list lives in _common so rename and the plot pickers can't
+# drift apart (see _common.VERSION_KEYED_TABLES).
+VERSION_TABLES = VERSION_KEYED_TABLES
 
 
 def detect_role(db_path: Path) -> str:
@@ -88,35 +84,26 @@ def detect_role(db_path: Path) -> str:
     which case we bail rather than guess.
     """
     with sqlite3.connect(str(db_path)) as conn:
-        names = {row[0] for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )}
+        names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if "db_sync_version" in names:
         return "db-sync"
     if "node_version" in names:
         return "node"
-    raise SystemExit(
-        f"{db_path}: cannot detect role — neither db_sync_version nor "
-        f"node_version table present."
-    )
+    raise SystemExit(f"{db_path}: cannot detect role - neither db_sync_version nor node_version table present.")
 
 
 def count_for(conn: sqlite3.Connection, tables: tuple[str, ...], version: str) -> dict[str, int]:
     """Row count under `version` for each existing table.
 
-    Missing tables are silently skipped (returns no key) — keeps the script
+    Missing tables are silently skipped (returns no key) - keeps the script
     forward-compatible if a future schema drops one of them.
     """
     out: dict[str, int] = {}
-    existing = {row[0] for row in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'"
-    )}
+    existing = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     for t in tables:
         if t not in existing:
             continue
-        n = conn.execute(
-            f"SELECT COUNT(*) FROM {t} WHERE version = ?", (version,)
-        ).fetchone()[0]
+        n = conn.execute(f"SELECT COUNT(*) FROM {t} WHERE version = ?", (version,)).fetchone()[0]
         out[t] = n
     return out
 
@@ -145,7 +132,9 @@ def rename_in_db(
     total_to = sum(before_to.values())
 
     print(f"{db_path}  (role={role}, {len(tables)} version-keyed tables)")
-    print(f"  from: {from_version!r}  ({total_from:,} rows across {sum(1 for n in before_from.values() if n):,}/{len(before_from)} tables)")
+    print(
+        f"  from: {from_version!r}  ({total_from:,} rows across {sum(1 for n in before_from.values() if n):,}/{len(before_from)} tables)"
+    )
     for t, n in before_from.items():
         if n:
             print(f"    {t}: {n:,}")
@@ -171,7 +160,7 @@ def rename_in_db(
         print("  --dry-run: not writing.")
         return 0
 
-    with sqlite3.connect(str(db_path)) as conn:
+    with connect_writer(str(db_path)) as conn:
         try:
             conn.execute("BEGIN")
             changes: dict[str, int] = {}
@@ -213,10 +202,7 @@ def resolve_path(args: argparse.Namespace) -> Path:
         elif args.from_version.startswith("cardano-node "):
             role = "node"
         else:
-            raise SystemExit(
-                "Cannot infer --role from --from-version prefix. "
-                "Pass --role explicitly or use --path."
-            )
+            raise SystemExit("Cannot infer --role from --from-version prefix. Pass --role explicitly or use --path.")
     return ROLE_DIR[role] / f"{args.env}.db"
 
 
@@ -228,25 +214,29 @@ def main() -> int:
             "from the README."
         )
     )
-    parser.add_argument("--env", choices=["mainnet", "preprod", "preview"],
-                        help="Environment name. Locates data/<role>/<env>.db.")
-    parser.add_argument("--role", choices=["node", "db-sync"],
-                        help="Which role's DB to rename in. Inferred from "
-                             "the --from-version prefix if omitted.")
-    parser.add_argument("--path",
-                        help="Operate on a specific DB file (overrides --env/--role).")
-    parser.add_argument("--from-version", required=True,
-                        help="Existing version label to rename.")
-    parser.add_argument("--to-version", required=True,
-                        help="New version label to write.")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Show what would change without writing.")
-    parser.add_argument("--no-backup", action="store_true",
-                        help="Skip the timestamped pre-rename backup. "
-                             "Default is to take one (use backup-stats.py's API).")
-    parser.add_argument("--merge", action="store_true",
-                        help="Allow the rename even if the target label already has rows. "
-                             "Use only when intentionally merging two series.")
+    parser.add_argument(
+        "--env", choices=["mainnet", "preprod", "preview"], help="Environment name. Locates data/<role>/<env>.db."
+    )
+    parser.add_argument(
+        "--role",
+        choices=["node", "db-sync"],
+        help="Which role's DB to rename in. Inferred from the --from-version prefix if omitted.",
+    )
+    parser.add_argument("--path", help="Operate on a specific DB file (overrides --env/--role).")
+    parser.add_argument("--from-version", required=True, help="Existing version label to rename.")
+    parser.add_argument("--to-version", required=True, help="New version label to write.")
+    parser.add_argument("--dry-run", action="store_true", help="Show what would change without writing.")
+    parser.add_argument(
+        "--no-backup",
+        action="store_true",
+        help="Skip the timestamped pre-rename backup. Default is to take one (use backup-stats.py's API).",
+    )
+    parser.add_argument(
+        "--merge",
+        action="store_true",
+        help="Allow the rename even if the target label already has rows. "
+        "Use only when intentionally merging two series.",
+    )
     args = parser.parse_args()
 
     if not args.path and not args.env:

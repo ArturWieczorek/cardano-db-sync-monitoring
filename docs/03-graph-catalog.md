@@ -107,6 +107,37 @@ For the *how to produce them* part, see the [main README](../README.md). This do
 
 ---
 
+## Rollback performance graphs (db-sync `--metrics rollback`)
+
+Three stacked panels from `db-sync-rollback-monitor.py`. A rollback (chain reorg) makes db-sync delete blocks it had stored and re-apply the new ones; these panels show how that costs time. Each detected rollback is also drawn as a dashed vertical line across all panels, labelled with its depth. For the plain-language, step-by-step version see [14 - Reading the rollback graphs](14-reading-the-rollback-graphs.md).
+
+### DB event queue length
+
+- **Source**: `rollback_samples.queue_length` (the `cardano_db_sync_db_queue_length` gauge), scraped from the db-sync Prometheus endpoint (root path, default port 8080).
+- **X**: `slot_no` (= db slot height) or `ts`.
+- **Y**: number of items in db-sync's internal work queue.
+- **Healthy shape**: 0-1 at the tip; tens during catch-up sync.
+- **Regression signal**: for the same rollback, a version whose queue spikes higher or drains slower is doing more work / clearing it more slowly.
+- **Common misreads**: a high flat value isn't a rollback - it's normal catch-up backlog. The rollback signal is the *spike* relative to a calm baseline.
+
+### Node-DB block-height gap
+
+- **Source**: `rollback_samples.node_block_height - rollback_samples.db_block_height`.
+- **X**: `slot_no` or `ts`. **Y**: blocks behind (0 = caught up).
+- **Healthy shape**: flat near 0 at tip. A rollback drives it up, and the slope back down to 0 is the recovery.
+- **Regression signal**: a version whose gap takes longer to return to 0 after the same rollback recovers more slowly.
+- **Common misreads**: a forced rollback done by restarting db-sync leaves a sampling gap (the endpoint is down during the restart), so the dip may be missing here - the log-sourced event still captures it. See [01 §gap problem](01-time-series-fundamentals.md#why-naive-line-plots-mislead--the-gap-problem).
+
+### Rollback event duration
+
+- **Source**: `rollback_events` - `delete_duration_sec` for log-sourced events (the `x` markers, `source='log'`) and `recovery_duration_sec` for metrics-derived events (round markers, `source='metrics'`). Depth is `depth_blocks`.
+- **X**: event position (start time, or target slot on the slot axis). **Y**: seconds.
+- **Healthy shape**: occasional low dots (sub-second to a few seconds on testnets).
+- **Regression signal**: the regression-prone number is the **deletion** dot - a version that deletes the same depth in noticeably more time, or trends to minutes, is the "lengthy rollback" failure mode this feature exists to catch. The per-table detail is in `rollback_table_deletes`.
+- **Common misreads**: an empty panel usually means no rollback was detected in the window (not an error); a rollback captured only via the log shows a `Deletion` dot but no `Recovery` dot.
+
+---
+
 ## Sync time by era and per epoch (node and db-sync, different sources)
 
 ### Sync time by era (bar chart)

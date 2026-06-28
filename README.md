@@ -125,6 +125,41 @@ python3 scripts/node-rts-monitor.py --env preprod --node-ver 11.0.1 --list-metri
 
 `node-resource-monitor.py` is left untouched - the scrape is isolated behind a timeout so a slow/dead endpoint just skips the sample. Needs the node run with `+RTS -T` and `hasPrometheus`. Plot with `--metrics rts`. Full reference: [`# RTS / runtime metrics monitor`](#rts--runtime-metrics-monitor).
 
+### Track cardano-db-sync rollbacks (optional, separate collector)
+
+Passive collector that watches a live db-sync for rollbacks (chain reorgs) and how it copes with them: it scrapes the db-sync Prometheus endpoint (default `http://127.0.0.1:8080/metrics`) for the queue length and the db/node tip heights, and appends them to the same `data/cardano-db-sync/<env>.db` under the same `--db-sync-ver` label. A rollback shows up as the db tip going *backward*; recovery is it climbing back to the node tip. It writes only its own new tables (`rollback_samples`, `rollback_events`, `rollback_table_deletes`) - the sync-monitoring tables are never touched.
+
+```bash
+# Metrics-only (queue length, tip gap, recovery time derived at plot time)
+python3 scripts/db-sync-rollback-monitor.py --env preprod --db-sync-ver 13.7.1.0-node-11.0.1
+
+# Also tail the db-sync log for exact deletion-phase timing + per-table delete counts
+python3 scripts/db-sync-rollback-monitor.py --env preprod --db-sync-ver 13.7.1.0-node-11.0.1 \
+  --log-file /var/log/cardano-db-sync.log
+```
+
+Plot with `db-sync-plot.py --metrics rollback` (queue length, node-db tip gap, recovery time per event). New to these graphs? [docs/14 - Reading the rollback graphs](docs/14-reading-the-rollback-graphs.md) is a plain-language, step-by-step guide to what each panel means and how to spot a regression.
+
+### Benchmark a controlled rollback (cross-version regression check)
+
+`db-sync-rollback-benchmark.py` measures the rollback *deletion phase* of a specific db-sync version by running its `cardano-db-tool rollback --slot <N>` against a Postgres DB synced to a chosen tip slot S. cardano-db-tool runs the exact delete path db-sync uses but needs only a DB connection (no node, no running db-sync), so the measurement is isolated and reproducible.
+
+To compare two versions fairly when one is ahead on the chain: sync **one** DB to slot S and snapshot it, then run each version's `cardano-db-tool` against a fresh restore of that snapshot, rolling back to the same `S - D`. Identical starting bytes and identical depth make the db-sync version the only variable.
+
+```bash
+# Snapshot a DB at slot S once (e.g. pg_dump), then for each version:
+python3 scripts/db-sync-rollback-benchmark.py \
+  --env preprod --db-sync-ver 13.7.1.0-node-11.0.1 \
+  --db-tool /path/to/13.7.1.0/cardano-db-tool \
+  --from-slot 90000000 --to-slot 89978400 --reps 5 \
+  --restore-cmd 'pg_restore --clean --if-exists -d preprod_bench snap_at_S.dump' \
+  --compare-cmd 'db-sync-compare --db1 ... --db2 ...'   # optional equivalence check
+```
+
+It reports median/min/max/stdev of the deletion duration and peak RSS/CPU (CPU and peak RSS come from `getrusage`, so they're exact even for a sub-second rollback), and stores each repetition in the `rollback_benchmarks` table. The rollback is destructive, so `--restore-cmd` is required for meaningful `--reps > 1`; the restore runs before **every** repetition (including the first) so they all start from the same freshly-restored state.
+
+Fairness caveats to control yourself for trustworthy small-regression detection: deletion time is dominated by I/O on cascading FK deletes, so Postgres cache state matters. A `pg_restore` leaves cold `shared_buffers`/page cache, and a synced DB packs pages differently than a restored one - keep the restore identical across the versions you compare, run on the same host/PG config with no other load, and reset cache to a known state between runs (e.g. restart Postgres or `pg_prewarm` consistently) if you need to resolve small differences. Recovery-phase timing (re-applying blocks to the tip) needs a live node + db-sync and is out of scope here.
+
 ### Plot a cardano-node SQLite DB
 
 ```bash
@@ -581,7 +616,8 @@ Default behavior plots memory + CPU. Pick a different metric set with `--metrics
 | `ingest` | Tip lag, DB size, block insert rate, tx insert rate, UTXO set size (if enabled) |
 | `tables` | Approximate row counts per hot table on a log y-axis (one line per table per version) |
 | `disk` | On-disk ledger-state size over time (total + `lsm/` subdir), from the `disk_metrics` table written by `db-sync-ledger-size-monitor.py` |
-| `all` | Produces one HTML for each of the above (`disk` is skipped with a notice if its table wasn't collected) |
+| `rollback` | DB event queue length, node-db block-height gap, and rollback recovery time per event, from the `rollback_samples` / `rollback_events` tables written by `db-sync-rollback-monitor.py` |
+| `all` | Produces one HTML for each of the above (`disk` and `rollback` are skipped with a notice if their tables weren't collected) |
 
 ```bash
 # ingest metrics over time (what's the new version doing?)

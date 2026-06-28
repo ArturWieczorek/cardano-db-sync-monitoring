@@ -37,17 +37,32 @@ rename_version = _load_rename_module()
 
 
 def _make_db_sync_db(path: Path, rows_per_version: dict[str, int]) -> None:
-    """Create a minimal db-sync stats DB containing all five version-keyed
-    tables. Each table receives `n` rows for each (version, n) in the map."""
+    """Create a minimal db-sync stats DB containing all version-keyed tables
+    (the resource-monitor set plus the three rollback tables). Each table
+    receives `n` rows for each (version, n) in the map. The payload columns are
+    a simplified stand-in; only the `version` column matters for rename."""
     conn = sqlite3.connect(str(path))
     try:
-        conn.execute("CREATE TABLE memory_metrics  (version TEXT, payload TEXT)")
-        conn.execute("CREATE TABLE cpu_metrics     (version TEXT, payload TEXT)")
-        conn.execute("CREATE TABLE db_sync_version (timestamp TEXT, version TEXT)")
-        conn.execute("CREATE TABLE ingest_metrics  (version TEXT, payload TEXT)")
-        conn.execute("CREATE TABLE table_rowcounts (version TEXT, payload TEXT)")
+        conn.execute("CREATE TABLE memory_metrics         (version TEXT, payload TEXT)")
+        conn.execute("CREATE TABLE cpu_metrics            (version TEXT, payload TEXT)")
+        conn.execute("CREATE TABLE db_sync_version        (timestamp TEXT, version TEXT)")
+        conn.execute("CREATE TABLE ingest_metrics         (version TEXT, payload TEXT)")
+        conn.execute("CREATE TABLE table_rowcounts        (version TEXT, payload TEXT)")
+        conn.execute("CREATE TABLE rollback_samples       (version TEXT, payload TEXT)")
+        conn.execute("CREATE TABLE rollback_events        (version TEXT, payload TEXT)")
+        conn.execute("CREATE TABLE rollback_table_deletes (version TEXT, payload TEXT)")
+        conn.execute("CREATE TABLE rollback_benchmarks    (version TEXT, payload TEXT)")
         for v, n in rows_per_version.items():
-            for t in ("memory_metrics", "cpu_metrics", "ingest_metrics", "table_rowcounts"):
+            for t in (
+                "memory_metrics",
+                "cpu_metrics",
+                "ingest_metrics",
+                "table_rowcounts",
+                "rollback_samples",
+                "rollback_events",
+                "rollback_table_deletes",
+                "rollback_benchmarks",
+            ):
                 conn.executemany(
                     f"INSERT INTO {t} (version, payload) VALUES (?, ?)",
                     [(v, f"p{i}") for i in range(n)],
@@ -134,6 +149,10 @@ class TestCountFor:
             "db_sync_version": 3,
             "ingest_metrics": 3,
             "table_rowcounts": 3,
+            "rollback_samples": 3,
+            "rollback_events": 3,
+            "rollback_table_deletes": 3,
+            "rollback_benchmarks": 3,
         }
 
     def test_missing_tables_are_skipped(self, tmp_path: Path) -> None:

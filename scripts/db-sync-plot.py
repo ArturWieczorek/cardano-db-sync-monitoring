@@ -24,6 +24,7 @@ from _common import (
     short,
     subplot_dims,
 )
+from _rollback import RollbackSample, derive_events
 from pandas import DataFrame
 from plotly.graph_objs import Figure
 from plotly.subplots import make_subplots
@@ -167,6 +168,111 @@ def load_disk(sqlite_file: str, versions: list[str], x_axis: str = "time") -> Da
         df = attach_slot_by_ts(df, sqlite_file, versions)
     df = insert_gap_breaks(df, ["version"])
     return df
+
+
+def load_rollback_samples(sqlite_file: str, versions: list[str], x_axis: str) -> DataFrame:
+    """Load the raw `rollback_samples` tip/queue series for the selected versions.
+
+    Adds a `block_gap` column (node tip minus db tip) - the catch-up distance
+    that spikes on a rollback and decays back to ~0 as db-sync recovers.
+    """
+    placeholders = ",".join("?" for _ in versions)
+    ts_filter = " AND ts IS NOT NULL" if x_axis == "time" else ""
+    sql = (
+        "SELECT ts, slot_no, version, db_block_height, db_slot_height, "
+        "node_block_height, queue_length "
+        f"FROM rollback_samples WHERE version IN ({placeholders}){ts_filter}"
+    )
+    with sqlite3.connect(sqlite_file) as conn:
+        df = pd.read_sql_query(sql, conn, params=versions)  # type: ignore[arg-type]
+    df["ts"] = pd.to_datetime(df["ts"], errors="coerce")
+    df["block_gap"] = df["node_block_height"] - df["db_block_height"]
+    df = insert_gap_breaks(df, ["version"])
+    return df
+
+
+def load_rollback_events(sqlite_file: str, versions: list[str]) -> DataFrame:
+    """Load log-sourced rollback events (deletion phase) for the selected versions.
+    Empty frame (with the expected columns) when the table is absent or empty."""
+    cols = [
+        "version",
+        "start_ts",
+        "from_slot",
+        "depth_blocks",
+        "delete_duration_sec",
+        "recovery_duration_sec",
+        "source",
+    ]
+    if not has_table(sqlite_file, "rollback_events"):
+        return pd.DataFrame(columns=cols)
+    placeholders = ",".join("?" for _ in versions)
+    sql = (
+        "SELECT version, event_start_ts AS start_ts, from_slot, depth_blocks, "
+        "delete_duration_sec, recovery_duration_sec, source "
+        f"FROM rollback_events WHERE version IN ({placeholders})"
+    )
+    with sqlite3.connect(sqlite_file) as conn:
+        df = pd.read_sql_query(sql, conn, params=versions)  # type: ignore[arg-type]
+    df["start_ts"] = pd.to_datetime(df["start_ts"], errors="coerce")
+    return df
+
+
+def derive_events_from_samples(samples_df: DataFrame) -> DataFrame:
+    """Derive rollback events (tip went backward) from the raw sample series, per
+    version, using the same logic the analysis layer shares with the monitor.
+
+    This is the Prometheus-only path: when no db-sync log was tailed, the tip
+    regressions in `rollback_samples` are still enough to recover depth and
+    recovery time. Returns columns aligned with `load_rollback_events`
+    (source='metrics'); recovery_duration_sec is populated here, delete phase is not.
+    """
+    cols = [
+        "version",
+        "start_ts",
+        "from_slot",
+        "depth_blocks",
+        "delete_duration_sec",
+        "recovery_duration_sec",
+        "source",
+    ]
+    if samples_df.empty:
+        return pd.DataFrame(columns=cols)
+    out: list[dict[str, object]] = []
+    for version, sub in samples_df.groupby("version", sort=False):
+        # Drop the synthetic NaN-height rows insert_gap_breaks adds for plotting,
+        # so event derivation works on the real series only (not load-bearing on a
+        # plotting concern). Real scrapes always carry a height.
+        sub = sub.dropna(subset=["ts", "db_block_height"]).sort_values("ts")
+        # .tolist() yields plain Python scalars (typed Any), avoiding the noisy
+        # numpy/pandas union that mypy infers from itertuples attribute access.
+        ts_vals = sub["ts"].tolist()
+        blk = sub["db_block_height"].tolist()
+        slot = sub["db_slot_height"].tolist()
+        node = sub["node_block_height"].tolist()
+        queue = sub["queue_length"].tolist()
+        samples = [
+            RollbackSample(
+                ts=pd.Timestamp(ts_vals[i]).timestamp(),
+                db_block_height=None if pd.isna(blk[i]) else int(blk[i]),
+                db_slot_height=None if pd.isna(slot[i]) else int(slot[i]),
+                node_block_height=None if pd.isna(node[i]) else int(node[i]),
+                queue_length=None if pd.isna(queue[i]) else float(queue[i]),
+            )
+            for i in range(len(ts_vals))
+        ]
+        out.extend(
+            {
+                "version": version,
+                "start_ts": pd.to_datetime(ev.start_ts, unit="s", utc=True),
+                "from_slot": ev.from_slot,
+                "depth_blocks": ev.depth_blocks,
+                "delete_duration_sec": None,
+                "recovery_duration_sec": ev.recovery_duration_sec,
+                "source": "metrics",
+            }
+            for ev in derive_events(samples)
+        )
+    return pd.DataFrame(out, columns=cols)
 
 
 # --- Plotters ----------------------------------------------------------------
@@ -388,6 +494,75 @@ def plot_disk(df: DataFrame, versions: list[str], outdir: str, env: str, x_axis:
     print(f"Saved plot to {path}")
 
 
+def build_rollback(samples_df: DataFrame, events_df: DataFrame, versions: list[str], env: str, x_axis: str) -> Figure:
+    """Build the rollback figure (no I/O); `plot_rollback` is the CLI writer.
+
+    Three stacked panels sharing the chosen x-axis:
+      1. Queue length - the db-event backlog that spikes during a rollback.
+      2. Node-vs-db block-height gap - the catch-up distance; a rollback drives
+         it up, recovery brings it back to ~0. Rollback starts are marked.
+      3. Recovery time per event - how long the db tip took to climb back to the
+         pre-rollback height (the "Rollback Recovery Times" signal).
+    """
+    x_col = "ts" if x_axis == "time" else "slot_no"
+    ev_x = "start_ts" if x_axis == "time" else "from_slot"
+    x_label = "Time" if x_axis == "time" else "Slot Number"
+
+    rows = 3
+    titles = [
+        f"DB Event Queue Length by {x_label}",
+        f"Node-DB Block-Height Gap by {x_label}",
+        f"Rollback Recovery Time (sec) by {x_label}",
+    ]
+    total_px, vspace = subplot_dims(rows)
+    fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=vspace, subplot_titles=titles)
+
+    for v in versions:
+        d = samples_df[samples_df["version"] == v].sort_values(x_col)
+        fig.add_trace(
+            go.Scatter(x=d[x_col], y=d["queue_length"], mode="lines", name=f"Queue - {short(v)}"), row=1, col=1
+        )
+        fig.add_trace(go.Scatter(x=d[x_col], y=d["block_gap"], mode="lines", name=f"Gap - {short(v)}"), row=2, col=1)
+
+    # Recovery markers (metrics-derived events carry recovery time; size encodes depth).
+    for v in versions:
+        ev = events_df[(events_df["version"] == v) & events_df["recovery_duration_sec"].notna()]
+        if ev.empty:
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=ev[ev_x],
+                y=ev["recovery_duration_sec"],
+                mode="markers",
+                name=f"Recovery - {short(v)}",
+                text=[f"depth {int(d)} blocks" if pd.notna(d) else "" for d in ev["depth_blocks"]],
+                hovertemplate="%{y:.0f}s recovery<br>%{text}<extra></extra>",
+            ),
+            row=3,
+            col=1,
+        )
+
+    fig.update_layout(
+        title=dict(text=f"{env} cardano-db-sync - Rollback Performance", x=0.5, xanchor="center"),
+        legend_title="Version",
+        height=total_px,
+    )
+    fig.update_xaxes(title_text=x_label, row=rows, col=1)
+    fig.update_yaxes(title_text="events", row=1, col=1)
+    fig.update_yaxes(title_text="blocks", row=2, col=1)
+    fig.update_yaxes(title_text="seconds", row=3, col=1)
+    return fig
+
+
+def plot_rollback(
+    samples_df: DataFrame, events_df: DataFrame, versions: list[str], outdir: str, env: str, x_axis: str
+) -> None:
+    fig = build_rollback(samples_df, events_df, versions, env, x_axis)
+    path = out_path(outdir, env, versions, "rollback", x_axis)
+    fig.write_html(path)
+    print(f"Saved plot to {path}")
+
+
 # --- CLI ---------------------------------------------------------------------
 
 
@@ -418,14 +593,16 @@ def parse_args() -> Args:
     )
     parser.add_argument(
         "--metrics",
-        choices=["cpu_ram", "ingest", "tables", "disk", "all"],
+        choices=["cpu_ram", "ingest", "tables", "disk", "rollback", "all"],
         default="cpu_ram",
         help="Which plot to produce. 'cpu_ram' (default) plots memory and CPU. "
         "'ingest' plots tip lag, DB size, block/tx rate, UTXO count. "
         "'tables' plots approximate row counts per hot table. "
         "'disk' plots on-disk ledger-state size over time (total + lsm subdir) "
         "from db-sync-ledger-size-monitor.py's disk_metrics table. "
-        "'all' produces one HTML per kind (disk skipped if not collected).",
+        "'rollback' plots queue length, node-db tip gap, and recovery time "
+        "from db-sync-rollback-monitor.py's rollback_samples/rollback_events tables. "
+        "'all' produces one HTML per kind (disk/rollback skipped if not collected).",
     )
     parsed = parser.parse_args()
     sqlite_db = parsed.sqlite_db or str(DEFAULT_DATA_DIR / f"{parsed.env}.db")
@@ -527,6 +704,41 @@ def render_disk(args: Args, chosen: list[str]) -> None:
     plot_disk(df[df["version"].isin(plottable)], plottable, args.outdir, args.env, args.x_axis)
 
 
+def render_rollback(args: Args, chosen: list[str]) -> None:
+    """Plot rollback performance (queue length, tip gap, recovery time).
+
+    Like render_disk, a graceful no-op when the optional rollback_samples table
+    or its rows are absent, so `--metrics all` keeps working on DBs that never
+    ran db-sync-rollback-monitor.py. Events are taken from the log-sourced
+    rollback_events table when present, plus those derived from the tip series
+    (the Prometheus-only path), so recovery markers appear either way.
+    """
+    if not has_table(args.sqlite_db, "rollback_samples"):
+        print(
+            "Skipping rollback plot: no rollback_samples table in this DB "
+            "(run db-sync-rollback-monitor.py to collect rollback metrics)."
+        )
+        return
+    samples_df = load_rollback_samples(args.sqlite_db, chosen, args.x_axis)
+    if samples_df.empty:
+        print("Skipping rollback plot: no rollback_samples rows for the selected versions.")
+        return
+    plottable = _filter_versions_with_data(samples_df, chosen, "rollback_samples")
+    if not plottable:
+        print("Skipping rollback plot: none of the selected versions have rollback_samples rows.")
+        return
+    samples_df = samples_df[samples_df["version"].isin(plottable)]
+    # Combine log-sourced and metrics-derived events; drop empty frames first so
+    # pandas doesn't warn about concatenating all-NA columns (FutureWarning).
+    event_frames = [
+        df
+        for df in (load_rollback_events(args.sqlite_db, plottable), derive_events_from_samples(samples_df))
+        if not df.empty
+    ]
+    events_df = pd.concat(event_frames, ignore_index=True) if event_frames else derive_events_from_samples(samples_df)
+    plot_rollback(samples_df, events_df, plottable, args.outdir, args.env, args.x_axis)
+
+
 def main() -> None:
     args = parse_args()
 
@@ -557,7 +769,7 @@ def main() -> None:
             print("Invalid selection. Exiting.")
             return
 
-    kinds = ["cpu_ram", "ingest", "tables", "disk"] if args.metrics == "all" else [args.metrics]
+    kinds = ["cpu_ram", "ingest", "tables", "disk", "rollback"] if args.metrics == "all" else [args.metrics]
     for kind in kinds:
         if kind == "cpu_ram":
             render_cpu_ram(args, chosen)
@@ -567,6 +779,8 @@ def main() -> None:
             render_tables(args, chosen)
         elif kind == "disk":
             render_disk(args, chosen)
+        elif kind == "rollback":
+            render_rollback(args, chosen)
 
 
 if __name__ == "__main__":

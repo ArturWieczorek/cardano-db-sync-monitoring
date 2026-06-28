@@ -17,12 +17,15 @@ Naming convention for users:
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import sys
 import warnings
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
+from urllib.error import URLError
+from urllib.request import urlopen
 
 import pandas as pd
 import psutil
@@ -196,6 +199,57 @@ def compute_epoch_durations(df: pd.DataFrame) -> pd.DataFrame:
     )
     g["duration_sec"] = (g["ts_max"] - g["ts_min"]).dt.total_seconds()
     return g[["version", "epoch_no", "era", "duration_sec"]]
+
+
+# --- Prometheus text-exposition parsing ------------------------------------
+
+# name{labels}  value  [timestamp]  - labels and trailing timestamp optional.
+_PROM_METRIC_RE = re.compile(r"^(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{[^}]*\})?\s+(?P<rest>.+)$")
+
+
+def fetch_prometheus_text(url: str, timeout: float) -> str | None:
+    """GET a Prometheus endpoint. Returns the body, or None on any failure
+    (logged) - the caller skips the sample rather than crashing its loop."""
+    try:
+        with urlopen(url, timeout=timeout) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+    except (URLError, OSError, ValueError) as e:
+        warn(f"Prometheus scrape failed for {url}: {e}")
+        return None
+
+
+def parse_prometheus_text(text: str) -> dict[str, float]:
+    """Parse Prometheus text-exposition format into {metric_name: value}.
+
+    Skips `#` HELP/TYPE/comment lines and blank lines, strips any `{labels}`
+    from the key, takes the first whitespace token after the name as the value
+    (ignoring an optional trailing timestamp), and drops anything that isn't a
+    finite float (NaN / +Inf / -Inf / unparseable). Last value wins on
+    duplicate names (our gauges are unlabeled, so this doesn't bite).
+
+    Shared by the node RTS scraper (node-rts-monitor.py) and the db-sync rollback
+    scraper (_rollback.py); both consume the same Prometheus endpoint format.
+    """
+    out: dict[str, float] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = _PROM_METRIC_RE.match(line)
+        if not m:
+            continue
+        tokens = m.group("rest").split()
+        if not tokens:
+            continue
+        try:
+            val = float(tokens[0])
+        except ValueError:
+            continue
+        # Reject NaN / ±Inf - they'd poison plots and aggregations.
+        if val != val or val in (float("inf"), float("-inf")):
+            continue
+        out[m.group("name")] = val
+    return out
 
 
 # --- psutil sampling -------------------------------------------------------
@@ -416,6 +470,10 @@ VERSION_KEYED_TABLES: dict[str, tuple[str, ...]] = {
         "db_sync_version",
         "ingest_metrics",
         "table_rowcounts",
+        "rollback_samples",
+        "rollback_events",
+        "rollback_table_deletes",
+        "rollback_benchmarks",
     ),
 }
 

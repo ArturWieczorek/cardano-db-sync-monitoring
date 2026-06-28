@@ -31,7 +31,6 @@ plotting, no prompts. Stops cleanly on SIGINT/SIGTERM.
 
 import argparse
 import json
-import re
 import signal
 import sqlite3
 import sys
@@ -42,7 +41,7 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from _common import connect_writer, warn
+from _common import connect_writer, parse_prometheus_text, warn
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data" / "cardano-node"
@@ -66,39 +65,6 @@ DEFAULT_INCLUDE: tuple[str, ...] = (
 # the RTS series can share the slot x-axis with the other metrics. Matched by
 # substring so it works across naming schemes (`cardano_node_metrics_slotNum_int`).
 _SLOT_SUBSTR = "slotnum"
-
-# name{labels}  value  [timestamp]  - labels and trailing timestamp optional.
-_METRIC_RE = re.compile(r"^(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{[^}]*\})?\s+(?P<rest>.+)$")
-
-
-def parse_prometheus_text(text: str) -> dict[str, float]:
-    """Parse Prometheus text-exposition format into {metric_name: value}.
-
-    Skips `#` HELP/TYPE/comment lines and blank lines, strips any `{labels}`
-    from the key, takes the first whitespace token after the name as the value
-    (ignoring an optional trailing timestamp), and drops anything that isn't a
-    finite float (NaN / +Inf / -Inf / unparseable). Last value wins on
-    duplicate names (our gauges are unlabeled, so this doesn't bite)."""
-    out: dict[str, float] = {}
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        m = _METRIC_RE.match(line)
-        if not m:
-            continue
-        tokens = m.group("rest").split()
-        if not tokens:
-            continue
-        try:
-            val = float(tokens[0])
-        except ValueError:
-            continue
-        # Reject NaN / ±Inf - they'd poison plots and aggregations.
-        if val != val or val in (float("inf"), float("-inf")):
-            continue
-        out[m.group("name")] = val
-    return out
 
 
 def select_metrics(metrics: dict[str, float], includes: list[str]) -> dict[str, float]:

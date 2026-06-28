@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Rollback performance tracking for cardano-db-sync.** A rollback (chain
+  reorg) makes db-sync delete blocks and re-apply them; a regression here shows
+  up as a lengthy deletion or slow recovery, which is exactly what operators
+  watch in Grafana ("Queue Length", "Rollback Recovery Times"). Two new tools,
+  sharing a tested core (`scripts/_rollback.py`):
+
+  - **`scripts/db-sync-rollback-monitor.py`** - a passive collector that scrapes
+    the db-sync Prometheus endpoint (default port 8080) and records the
+    rollback-relevant gauges (queue length, db/node tip heights) to a new
+    `rollback_samples` table. A rollback is the db tip going *backward*; recovery
+    is it climbing back to the node tip. With `--log-file` it also tails the
+    db-sync log for the authoritative deletion-phase signals, writing each
+    completed rollback to `rollback_events` (exact deletion duration) and its
+    per-table counts to `rollback_table_deletes`. Without a log, events are
+    derived from the tip series at plot time. It only ever creates and INSERTs
+    into its own tables - the existing sync-monitoring tables are never written.
+
+  - **`scripts/db-sync-rollback-benchmark.py`** - a controlled cross-version
+    benchmark. It runs a specific version's `cardano-db-tool rollback --slot <N>`
+    (the same delete path production db-sync uses, but needing only a DB
+    connection - no node, no running db-sync) against a database synced to a
+    normalized tip slot S, times the deletion phase, and samples peak RSS/CPU,
+    over N repetitions with median/min/max/stdev. To compare versions fairly when
+    they sit at different chain points: sync one DB to S, snapshot it, then for
+    each version restore the snapshot and roll back to S-D - identical starting
+    bytes and depth make the version the only variable. An optional
+    `--compare-cmd` (e.g. a `db-sync-compare` invocation) records data
+    equivalence. Results go to a new `rollback_benchmarks` table.
+
+- **Plot integration (`db-sync-plot.py --metrics rollback`, included in `all`).**
+  Three panels: DB event queue length, node-vs-db block-height gap (the catch-up
+  distance), and rollback recovery time per event. Events come from the
+  log-sourced `rollback_events` table when present plus those derived from the
+  tip series, so recovery markers appear with or without a tailed log. Gap-aware
+  and supports `--x-axis {slot,time}`; a graceful no-op when no rollback data was
+  collected.
+
+### Changed
+
+- The four rollback tables are registered in `_common.VERSION_KEYED_TABLES`, so
+  `rename-version.py` rewrites them and the plot picker lists their versions like
+  every other collector. The shared Prometheus text parser and HTTP fetch now
+  live in `_common` (`parse_prometheus_text`, `fetch_prometheus_text`), reused by
+  both the node RTS scraper and the db-sync rollback monitor.
+
 ## [1.3.0] - 2026-06-16
 
 Adds the SQLite stats-report tooling: per-environment InMemory-vs-LSM comparison

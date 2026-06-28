@@ -10,12 +10,16 @@ stale rows and silently dropping ingest/tables panels.
 Schema (which tables carry a `version` column):
 
     db-sync DB: memory_metrics, cpu_metrics, db_sync_version,
-                ingest_metrics, table_rowcounts        (5 tables)
+                ingest_metrics, table_rowcounts, rollback_samples,
+                rollback_events, rollback_table_deletes,
+                rollback_benchmarks                    (9 tables)
     node DB:    memory_metrics, cpu_metrics, node_version,
                 node_ingest_metrics, disk_metrics,
                 rts_metrics                            (6 tables)
 
-The script auto-detects role from the schema (presence of `db_sync_version`
+The exact set is the single source of truth in `_common.VERSION_KEYED_TABLES`;
+this script is data-driven from it, so a missing table is skipped rather than
+erroring. It auto-detects role from the schema (presence of `db_sync_version`
 vs `node_version`) and updates every table in one transaction.
 
 Usage:

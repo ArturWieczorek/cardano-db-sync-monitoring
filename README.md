@@ -138,7 +138,7 @@ python3 scripts/db-sync-rollback-monitor.py --env preprod --db-sync-ver 13.7.1.0
   --log-file /var/log/cardano-db-sync.log
 ```
 
-Plot with `db-sync-plot.py --metrics rollback` (queue length, node-db tip gap, recovery time per event).
+Plot with `db-sync-plot.py --metrics rollback` (queue length, node-db tip gap, recovery time per event). New to these graphs? [docs/14 - Reading the rollback graphs](docs/14-reading-the-rollback-graphs.md) is a plain-language, step-by-step guide to what each panel means and how to spot a regression.
 
 ### Benchmark a controlled rollback (cross-version regression check)
 

@@ -21,6 +21,7 @@ Read these in order if you're new; pick one if you have a specific question.
 | 11 | [Report generator internals](11-report-generator-internals.md) | How the report generator works inside, step by step: the one-way data flow, the three-file split (`db-sync-plot.py` / `_report.py` / the orchestrator), a function-by-function walk through a single run, the design choices and why, and how to extend it (incl. the cardano-node report). |
 | 12 | [Useful queries](12-useful-queries.md) | A copy-paste SQL cookbook for the SQLite stats DBs (both roles): peak RAM, on-disk / `lsm/` size, CPU, db-sync ingest & table sizes, node sync state & RTS heap, LSM-vs-InMemory side-by-side, gap detection. Units pre-converted to GiB. |
 | 13 | [Generating reports (cardano-node)](13-node-report-generation.md) | The cardano-node sibling of doc 10: how to use `node-stats-report.py` to auto-build the per-environment LSM-vs-InMemory node report. Same version-token model and formats; node's metric set (CPU & RAM, Ingest, On-disk Size, RTS), the epoch-axis Ingest figure, and the optional auto-skipped Disk/RTS sections. |
+| 14 | [Reading the rollback graphs](14-reading-the-rollback-graphs.md) | Plain-language, step-by-step guide to the `--metrics rollback` plot: what a rollback is, the three panels (queue length, node-db gap, event duration), the rollback markers, why a panel can be empty, how to spot a regression, and where the raw numbers live. |
 
 ## Reading paths by goal
 

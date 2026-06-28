@@ -74,8 +74,36 @@ conditions that made the planner mis-choose.
 
 ## Method A - confirm the root cause directly (fast, version-independent)
 
-You don't need the buggy binary to see the planner problem - just ask Postgres
-which plan it would use, with `EXPLAIN` (plan only, instant) on a mainnet DB:
+### The easy way: `rollback-plan-check.py`
+
+A one-shot script checks all four affected tables at once. It runs only `EXPLAIN`
+(plans, never executes), so it's read-only and instant, and it prints a verdict
+per table:
+
+```bash
+python3 scripts/rollback-plan-check.py --pg-dbname mainnet-dbsync-...
+```
+
+```
+  table                    rows  index used             verdict
+  -------------- --------------  ---------------------- -------
+  tx                121,072,744  idx_tx_block_id        GOOD (range index)
+  tx_cbor                     0  -                      empty (no data)
+  datum              34,859,144  idx_datum_tx_id        GOOD (range index)
+  tx_metadata       137,036,032  idx_tx_metadata_tx_id  GOOD (range index)
+
+OK: every populated table uses a range-index plan for the rollback min-id query.
+```
+
+It exits `0` if every populated table picks a good (range-index) plan, `1` if any
+picks the bad (PK + Filter) plan - so you can use it as a quick pre-upgrade or CI
+gate. `--show-plans` prints the full EXPLAIN for each table. (`PGHOST`/`PGPORT`/
+`PGUSER` env vars or the `--pg-host/--pg-port/--pg-user` flags select the server.)
+
+### The manual way (one table, to see the raw plan)
+
+You don't need the buggy binary or the script to see the planner problem - just
+ask Postgres which plan it would use, with `EXPLAIN` (plan only, instant):
 
 ```bash
 DB=mainnet-dbsync-...           # your mainnet db-sync database

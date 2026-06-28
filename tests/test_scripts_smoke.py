@@ -30,6 +30,7 @@ SCRIPTS = [
     "node-rts-monitor.py",
     "db-sync-rollback-monitor.py",
     "db-sync-rollback-benchmark.py",
+    "rollback-plan-check.py",
     "db-sync-stats-report.py",
     "node-stats-report.py",
     "stats-summary.py",

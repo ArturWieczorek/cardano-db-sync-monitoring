@@ -44,7 +44,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   log-sourced `rollback_events` table when present plus those derived from the
   tip series, so recovery markers appear with or without a tailed log. Gap-aware
   and supports `--x-axis {slot,time}`; a graceful no-op when no rollback data was
-  collected.
+  collected. Each detected rollback is also marked with a labelled vertical line
+  across all panels, so a log-only rollback (no metric tip-dip) is still visible.
+
+- **`scripts/rollback-plan-check.py`** - a read-only diagnostic for the rollback
+  query-planner regression (cardano-db-sync issue #2083). It runs `EXPLAIN`
+  (plans only, never executes) for db-sync's rollback min-id queries on `tx`,
+  `tx_cbor`, `datum`, and `tx_metadata`, and flags any table where Postgres would
+  pick the slow primary-key-scan-plus-filter plan instead of the range index.
+  Exits non-zero if any populated table is at risk, so it works as a pre-upgrade
+  or CI gate.
+
+- **Docs (`docs/14`-`docs/17`).** Plain-language guides: reading the rollback
+  graphs, a per-case how-to for the monitor and benchmark, a step-by-step
+  cross-version comparison walkthrough, and an issue #2083 reproduction guide.
 
 ### Changed
 

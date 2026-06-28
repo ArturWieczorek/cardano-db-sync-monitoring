@@ -112,6 +112,62 @@ class TestBuildRollback:
         assert any("Recovery" in n for n in names)
 
 
+class TestLogEventVisibleOnPlot:
+    def test_log_sourced_event_appears_even_without_recovery(self, tmp_path):
+        import pandas as pd
+
+        db = str(tmp_path / "preprod.db")
+        _seed_samples(db, _rising_then_rollback())
+        samples_df = db_plot.load_rollback_samples(db, [V], "time")
+        # A log-sourced event: deletion time present, recovery absent, only to_slot known.
+        events_df = pd.DataFrame(
+            [
+                {
+                    "version": V,
+                    "start_ts": pd.to_datetime("2026-06-28T12:00:04+00:00"),
+                    "from_slot": None,
+                    "to_slot": 8000,
+                    "depth_blocks": 5185,
+                    "delete_duration_sec": 22.84,
+                    "recovery_duration_sec": None,
+                    "source": "log",
+                }
+            ]
+        )
+        fig = db_plot.build_rollback(samples_df, events_df, [V], "preprod", "time")
+        names = [t.name for t in fig.data]
+        assert any("Deletion (log)" in n for n in names), names
+        # The deletion-duration marker carries the right y value.
+        del_trace = next(t for t in fig.data if "Deletion (log)" in t.name)
+        assert list(del_trace.y) == [22.84]
+        # A dashed vertical marker line was added for the event.
+        assert any(getattr(s, "line", None) and s.line.dash == "dot" for s in fig.layout.shapes)
+
+    def test_log_event_placed_on_slot_axis_via_to_slot(self, tmp_path):
+        import pandas as pd
+
+        db = str(tmp_path / "preprod.db")
+        _seed_samples(db, _rising_then_rollback())
+        samples_df = db_plot.load_rollback_samples(db, [V], "slot")
+        events_df = pd.DataFrame(
+            [
+                {
+                    "version": V,
+                    "start_ts": pd.NaT,
+                    "from_slot": None,
+                    "to_slot": 8000,
+                    "depth_blocks": 5185,
+                    "delete_duration_sec": 22.84,
+                    "recovery_duration_sec": None,
+                    "source": "log",
+                }
+            ]
+        )
+        fig = db_plot.build_rollback(samples_df, events_df, [V], "preprod", "slot")
+        del_trace = next(t for t in fig.data if "Deletion (log)" in t.name)
+        assert list(del_trace.x) == [8000]  # falls back to to_slot when from_slot is None
+
+
 class TestPlotRollbackFilename:
     def test_filename_tag(self, tmp_path, capture_figure):
         db = str(tmp_path / "preprod.db")

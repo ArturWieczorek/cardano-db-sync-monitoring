@@ -198,6 +198,7 @@ def load_rollback_events(sqlite_file: str, versions: list[str]) -> DataFrame:
         "version",
         "start_ts",
         "from_slot",
+        "to_slot",
         "depth_blocks",
         "delete_duration_sec",
         "recovery_duration_sec",
@@ -207,7 +208,7 @@ def load_rollback_events(sqlite_file: str, versions: list[str]) -> DataFrame:
         return pd.DataFrame(columns=cols)
     placeholders = ",".join("?" for _ in versions)
     sql = (
-        "SELECT version, event_start_ts AS start_ts, from_slot, depth_blocks, "
+        "SELECT version, event_start_ts AS start_ts, from_slot, to_slot, depth_blocks, "
         "delete_duration_sec, recovery_duration_sec, source "
         f"FROM rollback_events WHERE version IN ({placeholders})"
     )
@@ -230,6 +231,7 @@ def derive_events_from_samples(samples_df: DataFrame) -> DataFrame:
         "version",
         "start_ts",
         "from_slot",
+        "to_slot",
         "depth_blocks",
         "delete_duration_sec",
         "recovery_duration_sec",
@@ -265,6 +267,7 @@ def derive_events_from_samples(samples_df: DataFrame) -> DataFrame:
                 "version": version,
                 "start_ts": pd.to_datetime(ev.start_ts, unit="s", utc=True),
                 "from_slot": ev.from_slot,
+                "to_slot": ev.to_slot,
                 "depth_blocks": ev.depth_blocks,
                 "delete_duration_sec": None,
                 "recovery_duration_sec": ev.recovery_duration_sec,
@@ -494,25 +497,39 @@ def plot_disk(df: DataFrame, versions: list[str], outdir: str, env: str, x_axis:
     print(f"Saved plot to {path}")
 
 
+def _event_positions(ev: DataFrame, x_axis: str) -> "pd.Series":
+    """Per-event x position for the chosen axis: wall-clock start on the time
+    axis; on the slot axis the pre-rollback tip (from_slot) when known, else the
+    rollback target (to_slot) - log-sourced events only carry the target."""
+    if x_axis == "time":
+        return ev["start_ts"]
+    from_slot = ev["from_slot"]
+    return from_slot.where(from_slot.notna(), ev["to_slot"]) if "to_slot" in ev else from_slot
+
+
 def build_rollback(samples_df: DataFrame, events_df: DataFrame, versions: list[str], env: str, x_axis: str) -> Figure:
     """Build the rollback figure (no I/O); `plot_rollback` is the CLI writer.
 
     Three stacked panels sharing the chosen x-axis:
       1. Queue length - the db-event backlog that spikes during a rollback.
       2. Node-vs-db block-height gap - the catch-up distance; a rollback drives
-         it up, recovery brings it back to ~0. Rollback starts are marked.
-      3. Recovery time per event - how long the db tip took to climb back to the
-         pre-rollback height (the "Rollback Recovery Times" signal).
+         it up, recovery brings it back to ~0.
+      3. Per-event durations - deletion time for log-sourced rollbacks and
+         recovery time for metrics-derived ones.
+
+    Every rollback event (whether captured from the log or derived from the tip
+    series) is marked with a dashed vertical line across all panels and labelled
+    with its depth, so a rollback that left no metric tip-dip (e.g. one that
+    completed during a metrics-endpoint gap) is still visible.
     """
     x_col = "ts" if x_axis == "time" else "slot_no"
-    ev_x = "start_ts" if x_axis == "time" else "from_slot"
     x_label = "Time" if x_axis == "time" else "Slot Number"
 
     rows = 3
     titles = [
         f"DB Event Queue Length by {x_label}",
         f"Node-DB Block-Height Gap by {x_label}",
-        f"Rollback Recovery Time (sec) by {x_label}",
+        f"Rollback Event Duration (sec) by {x_label}",
     ]
     total_px, vspace = subplot_dims(rows)
     fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=vspace, subplot_titles=titles)
@@ -524,23 +541,51 @@ def build_rollback(samples_df: DataFrame, events_df: DataFrame, versions: list[s
         )
         fig.add_trace(go.Scatter(x=d[x_col], y=d["block_gap"], mode="lines", name=f"Gap - {short(v)}"), row=2, col=1)
 
-    # Recovery markers (metrics-derived events carry recovery time; size encodes depth).
     for v in versions:
-        ev = events_df[(events_df["version"] == v) & events_df["recovery_duration_sec"].notna()]
+        ev = events_df[events_df["version"] == v] if not events_df.empty else events_df
         if ev.empty:
             continue
-        fig.add_trace(
-            go.Scatter(
-                x=ev[ev_x],
-                y=ev["recovery_duration_sec"],
-                mode="markers",
-                name=f"Recovery - {short(v)}",
-                text=[f"depth {int(d)} blocks" if pd.notna(d) else "" for d in ev["depth_blocks"]],
-                hovertemplate="%{y:.0f}s recovery<br>%{text}<extra></extra>",
-            ),
-            row=3,
-            col=1,
-        )
+        pos = _event_positions(ev, x_axis)
+        # Dashed vertical line at each rollback, across all panels, with a depth
+        # label on the top panel. The label is a separate add_annotation rather
+        # than add_vline(annotation_text=...) because the latter averages the
+        # line's x-coords, which raises on a datetime axis.
+        for x, depth in zip(pos, ev["depth_blocks"]):
+            if pd.isna(x):
+                continue
+            for r in (1, 2, 3):
+                fig.add_vline(x=x, line_dash="dot", line_color="rgba(170,50,50,0.45)", row=r, col=1)
+            fig.add_annotation(
+                x=x,
+                y=0.98,
+                yref="y domain",
+                text=(f"rollback {int(depth)} blk" if pd.notna(depth) else "rollback"),
+                showarrow=False,
+                font=dict(size=9, color="rgb(170,50,50)"),
+                row=1,
+                col=1,
+            )
+        # Duration markers (panel 3): deletion time (log) and recovery time (metrics).
+        for col, label, symbol in (
+            ("delete_duration_sec", "Deletion (log)", "x"),
+            ("recovery_duration_sec", "Recovery (metrics)", "circle"),
+        ):
+            sub = ev[ev[col].notna()]
+            if sub.empty:
+                continue
+            fig.add_trace(
+                go.Scatter(
+                    x=_event_positions(sub, x_axis),
+                    y=sub[col],
+                    mode="markers",
+                    marker=dict(symbol=symbol, size=11),
+                    name=f"{label} - {short(v)}",
+                    text=[f"depth {int(b)} blocks" if pd.notna(b) else "depth n/a" for b in sub["depth_blocks"]],
+                    hovertemplate="%{y:.1f}s<br>%{text}<extra></extra>",
+                ),
+                row=3,
+                col=1,
+            )
 
     fig.update_layout(
         title=dict(text=f"{env} cardano-db-sync - Rollback Performance", x=0.5, xanchor="center"),
